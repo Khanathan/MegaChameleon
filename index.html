@@ -50,6 +50,34 @@
     <!-- Small confirm prompt shown while hiding -->
     <div id="confirm" class="hidden">Done hiding? Press <b>Y</b> to confirm, <b>N</b> to cancel.</div>
 
+    <!-- Paint toolbar: shown in paint mode (Q during the hide phase) -->
+    <div id="paint-toolbar" class="hidden">
+      <button class="tool selected" data-tool="pencil" title="Pencil (1)">&#9999;&#65039;</button>
+      <button class="tool" data-tool="brush" title="Brush (2)">&#128396;&#65039;</button>
+      <button class="tool" data-tool="fill" title="Fill (3)">
+        <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32">
+          <g transform="rotate(35 13 12)" stroke="#2b2b2b" stroke-width="1.6" stroke-linejoin="round">
+            <path d="M7 7 q6 -6 12 0" fill="none"/>
+            <path d="M6 7 L20 7 L17.5 20 L8.5 20 Z" fill="#c2c6cc"/>
+            <ellipse cx="13" cy="7" rx="7" ry="2.4" fill="#e0e3e8"/>
+          </g>
+          <path d="M20 11 C 25 14, 25 21, 24 26" fill="none" stroke="#2a8cff" stroke-width="3.2" stroke-linecap="round"/>
+          <ellipse cx="24" cy="27" rx="5.2" ry="2.1" fill="#2a8cff"/>
+        </svg>
+      </button>
+      <button class="tool" data-tool="pick" title="Pick color (4)">
+        <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32">
+          <rect x="20" y="4.5" width="7.5" height="5.5" rx="2.5" transform="rotate(45 23.75 7.25)" fill="#7ec8d6" stroke="#2b2b2b" stroke-width="1.6"/>
+          <path d="M21.5 9.5 L9 22" stroke="#2b2b2b" stroke-width="3.2" stroke-linecap="round"/>
+          <path d="M9.2 21 L6 25.5 L9.4 24.2 Z" fill="#2b2b2b"/>
+          <circle cx="5.6" cy="27" r="1.8" fill="#e8413c"/>
+        </svg>
+      </button>
+      <span id="current-color" title="Current color"></span>
+      <span id="swatches"></span>
+      <input id="color-input" type="color" value="#6abf69" title="Custom color" />
+    </div>
+
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>

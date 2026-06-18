@@ -38,11 +38,12 @@ any TypeScript error.
 
 ## Current state
 
-Milestones 1 and 2 are done (see the build order in `claudehelp/plan.md`). The whole game is
-in `src/main.ts` (one file for now); `index.html` holds the menu overlays and `src/style.css`
+Milestones 1, 2, and 3 are done (see the build order in `claudehelp/plan.md`). The whole game
+is in `src/main.ts` (one file for now); `index.html` holds the menu overlays and `src/style.css`
 the styling.
 
-- **Room:** an enclosed 50×50×30 box (floor, 4 walls, ceiling), pink-toned.
+- **Room:** an enclosed 50×50×30 box (floor, 4 walls, ceiling), pink-toned. The **back wall is
+  textured from `assets/amogus.jpeg`** (a first taste of M6) via `makeImageWall`.
 - **Chameleon:** a blocky humanoid built from grouped boxes — a placeholder for a real model.
 - **Movement/camera:** camera-relative WASD, Space/Shift to float up/down, right-mouse to
   turn the model (yaw only), an orbit camera via pointer-lock mouse-look, scroll to zoom.
@@ -51,9 +52,15 @@ the styling.
 - **Round flow:** a `gameState` machine (`menu → hiding → seeking → result`) decides which
   overlay shows and whether the sim runs. Main menu (Play, Settings), hide phase, a 30-second
   seek with countdown, and a result screen, plus a shared Settings panel (mouse sensitivity).
+- **Painting (M3):** press **Q** while hiding to enter a paint sub-mode (no new `gameState`).
+  Each chameleon part has its own canvas-backed texture (faces unwrapped to a grid so paint
+  doesn't bleed across them). Tools: pencil, brush, fill (whole model), pick (eyedrop from the
+  model *or* any wall, including the image wall). Top-left toolbar with room-palette swatches +
+  a color picker. In paint mode: LMB paints, RMB-drag orbits, A/D turn the model, 1–4 pick
+  tools, scroll zooms. The cursor becomes the selected tool's icon; re-picking a tool deselects.
 
-Still to come: painting (M3), seeker AI + suspicion meter (M4), `LevelProvider` + built-in
-maps (M5), image→room upload (M6), polish/deploy (M7).
+Still to come: seeker AI + suspicion meter (M4), `LevelProvider` + built-in maps (M5),
+image→room upload (M6), polish/deploy (M7).
 
 ## Decisions & gotchas to respect (don't "fix" these backwards)
 
@@ -69,6 +76,22 @@ maps (M5), image→room upload (M6), polish/deploy (M7).
   it in Milestone 4** once the real seeker can end the round.
 - **`noUnusedLocals` is on:** a variable that's only assigned but never read fails
   `npm run build`. Read it somewhere or remove it.
+- **Lighting is a deliberate "middleground" (don't "fix" it back to fancy).** Flat lighting made
+  color-matching exact but looked too flat; full shadows + SSAO + bloom looked odd. We settled on
+  a hemisphere fill + low ambient + one *low* directional light (no shadows) + ACES tone mapping,
+  no post-processing. This means a painted color matches a wall **closely but not exactly** —
+  facing/positioning matters a little, which suits the game. Raising the directional intensity
+  trades blend accuracy for more form.
+- **Color, not pixels (still).** Canvas-backed textures (chameleon parts, the image wall) must set
+  `texture.colorSpace = THREE.SRGBColorSpace` or the same hex renders differently than a flat
+  wall's `material.color`. The eyedropper reads known colors (a surface `material.color`, or a
+  canvas pixel via `getImageData`) — never a GPU read-back.
+- **M4 seeker should compare the *lit* color, not the raw base color** — computed from the known
+  base color + light + surface normal (no GPU read-back) — so its catch logic matches what the
+  player actually sees under the middleground lighting.
+- **Image-textured walls:** use a **fixed power-of-two canvas, never resized after the texture is
+  created** (resize-after-upload leaves the GPU texture stuck blank/black). Start it with a
+  placeholder fill, draw the image in `img.onload`, set `texture.needsUpdate`.
 
 ## Intended architecture (build toward this)
 
