@@ -1,9 +1,13 @@
 import './style.css'
 import * as THREE from 'three'
 
-// ----- Game state (a stub for now; Milestone 2 will switch between these) -----
-type GameState = 'menu' | 'hiding' | 'seeking'
-let gameState: GameState = 'hiding'
+// ----- Game state: drives which menu shows and whether the simulation runs -----
+type GameState = 'menu' | 'hiding' | 'seeking' | 'result'
+let gameState: GameState = 'menu' // the game opens on the main menu
+let paused = false                // Esc pause, only meaningful during hiding/seeking
+let outcome: 'win' | 'lose' = 'win'
+let seekTimeLeft = 0              // seconds left in the seek phase
+let confirmingHide = false        // showing the "done hiding?" confirm
 
 // ----- Renderer: draws the 3D picture onto the screen -----
 const renderer = new THREE.WebGLRenderer({ antialias: true })
@@ -99,8 +103,12 @@ window.addEventListener('keydown', (e) => {
 window.addEventListener('keyup', (e) => { keys[e.key.toLowerCase()] = false })
 
 // ----- F toggles fullscreen -----
+// Toggling fullscreen briefly drops pointer lock; we note the time so the pause logic
+// (further down) knows that unlock came from fullscreen, not from the player pausing.
+let lastFullscreenToggle = 0
 window.addEventListener('keydown', (e) => {
   if (e.key.toLowerCase() !== 'f') return
+  lastFullscreenToggle = performance.now()
   if (!document.fullscreenElement) document.documentElement.requestFullscreen()
   else document.exitFullscreen()
 })
@@ -149,52 +157,141 @@ window.addEventListener('wheel', (e) => {
 // ----- The on-screen text box -----
 const hud = document.getElementById('hud') as HTMLDivElement
 
-// ----- Pause menu (Esc) -----
-let paused = false
-const pauseEl = document.getElementById('pause') as HTMLDivElement
-const menuMain = document.getElementById('menu-main') as HTMLDivElement
-const menuSettings = document.getElementById('menu-settings') as HTMLDivElement
+// ----- Screens & round flow -----
+const screens = {
+  menu: document.getElementById('menu') as HTMLDivElement,
+  pause: document.getElementById('pause') as HTMLDivElement,
+  settings: document.getElementById('settings') as HTMLDivElement,
+  result: document.getElementById('result') as HTMLDivElement,
+}
+const confirmEl = document.getElementById('confirm') as HTMLDivElement
+const resultTitle = document.getElementById('result-title') as HTMLHeadingElement
 const sensInput = document.getElementById('sens-input') as HTMLInputElement
+let settingsReturn: 'menu' | 'pause' = 'menu' // which menu Settings returns to
 
-function showPause() {
-  paused = true
-  menuSettings.classList.add('hidden') // always open on the main menu
-  menuMain.classList.remove('hidden')
-  pauseEl.classList.remove('hidden')
+function hideAllScreens() {
+  for (const el of Object.values(screens)) el.classList.add('hidden')
+  confirmEl.classList.add('hidden')
 }
-function hidePause() {
+
+function setState(next: GameState) {
+  gameState = next
   paused = false
-  pauseEl.classList.add('hidden')
+  confirmingHide = false
+  hideAllScreens()
+  // menus need the cursor, so release the mouse if it was captured
+  if ((next === 'menu' || next === 'result') && document.pointerLockElement) {
+    document.exitPointerLock()
+  }
+  if (next === 'menu') screens.menu.classList.remove('hidden')
+  if (next === 'result') screens.result.classList.remove('hidden')
+  // 'hiding' and 'seeking' show no overlay — you're in the game
 }
 
-// Esc pauses/resumes. While the mouse is captured, pressing Esc makes the browser release
-// it, which we catch via 'pointerlockchange'; otherwise we toggle directly here.
+function startRound() {
+  chameleon.position.set(0, 0, 0)
+  chameleon.rotation.set(0, 0, 0)
+  setState('hiding')
+}
+
+const SEEK_SECONDS = 30
+function startSeek() {
+  seekTimeLeft = SEEK_SECONDS
+  setState('seeking')
+}
+function finishSeek(result: 'win' | 'lose') {
+  outcome = result
+  resultTitle.textContent = outcome === 'win' ? 'You survived!' : 'Caught!'
+  setState('result')
+}
+
+function openSettings(returnTo: 'menu' | 'pause') {
+  settingsReturn = returnTo
+  sensInput.value = String(sensitivity)
+  hideAllScreens()
+  screens.settings.classList.remove('hidden')
+}
+
+// pause (Esc) only while playing
+function pause() {
+  if (gameState !== 'hiding' && gameState !== 'seeking') return
+  paused = true
+  screens.pause.classList.remove('hidden')
+}
+function resume() {
+  paused = false
+  screens.pause.classList.add('hidden')
+}
+
+// Tab pauses/resumes WITHOUT leaving fullscreen: unlike Esc, the browser doesn't bind Tab to
+// exiting fullscreen/pointer lock, and the key still arrives while the mouse is captured. We
+// release the mouse ourselves so the menu is clickable but fullscreen stays on.
+// (Esc still works as a fallback: the browser releases the mouse on Esc, which the
+// pointerlockchange handler below turns into a pause.)
 window.addEventListener('keydown', (e) => {
-  if (e.key !== 'Escape') return
-  if (document.pointerLockElement === canvas) return // captured: pointerlockchange handles it
-  if (paused) hidePause()
-  else showPause()
+  if (e.key !== 'Tab') return
+  if (gameState !== 'hiding' && gameState !== 'seeking') return // only during play
+  if (!screens.settings.classList.contains('hidden')) return   // ignore while Settings is open
+  e.preventDefault() // stop Tab from moving keyboard focus
+  if (paused) { resume(); canvas.requestPointerLock() } // resume and re-capture the mouse
+  else { pause(); document.exitPointerLock() }          // free the cursor but stay in fullscreen
 })
 document.addEventListener('pointerlockchange', () => {
-  if (document.pointerLockElement === canvas) hidePause() // captured -> playing
-  else showPause()                                        // released -> paused
+  if (document.pointerLockElement === canvas) { resume(); return } // captured -> playing
+  // A fullscreen toggle also drops the lock — that should NOT pause the game.
+  if (performance.now() - lastFullscreenToggle < 1000) return
+  pause()                                                          // genuine release (Esc / tab away) -> pause
 })
 
-// Menu buttons
-document.getElementById('btn-settings')!.addEventListener('click', () => {
-  menuMain.classList.add('hidden')
-  menuSettings.classList.remove('hidden')
-  sensInput.value = String(sensitivity)
+// After a fullscreen change the lock is gone; if we're still playing, grab it back so
+// looking continues without needing another click.
+document.addEventListener('fullscreenchange', () => {
+  if ((gameState === 'hiding' || gameState === 'seeking') && !paused &&
+      document.pointerLockElement !== canvas) {
+    canvas.requestPointerLock()
+  }
 })
-document.getElementById('btn-back')!.addEventListener('click', () => {
-  menuSettings.classList.add('hidden')
-  menuMain.classList.remove('hidden')
+
+// the Y / confirm / Y flow to finish hiding, plus the temporary Shift+Y backdoor
+window.addEventListener('keydown', (e) => {
+  if (paused) return // ignore while the pause menu is open
+  const k = e.key.toLowerCase()
+  if (gameState === 'hiding') {
+    if (k === 'y') {
+      if (!confirmingHide) {
+        confirmingHide = true
+        confirmEl.classList.remove('hidden')
+      } else {
+        confirmEl.classList.add('hidden')
+        startSeek()
+      }
+    } else if (k === 'n' && confirmingHide) {
+      confirmingHide = false
+      confirmEl.classList.add('hidden')
+    }
+  } else if (gameState === 'seeking') {
+    // TEMP: Shift+Y ends the seek early (counts as a win) for testing — remove in Milestone 4
+    if (k === 'y' && e.shiftKey) finishSeek('win')
+  }
 })
-document.getElementById('btn-apply')!.addEventListener('click', () => {
+
+// menu buttons
+document.getElementById('btn-play')!.addEventListener('click', () => startRound())
+document.getElementById('btn-menu-settings')!.addEventListener('click', () => openSettings('menu'))
+document.getElementById('btn-pause-settings')!.addEventListener('click', () => openSettings('pause'))
+document.getElementById('btn-result-menu')!.addEventListener('click', () => setState('menu'))
+document.getElementById('btn-settings-back')!.addEventListener('click', () => {
+  hideAllScreens()
+  if (settingsReturn === 'menu') screens.menu.classList.remove('hidden')
+  else screens.pause.classList.remove('hidden')
+})
+document.getElementById('btn-settings-apply')!.addEventListener('click', () => {
   const v = parseFloat(sensInput.value)
   if (!Number.isNaN(v)) sensitivity = Math.max(0, Math.min(10, v))
   sensInput.value = String(sensitivity) // reflect the clamped value
 })
+
+setState('menu') // start on the main menu
 
 // ----- Keep everything sized to the window -----
 window.addEventListener('resize', () => {
@@ -225,11 +322,18 @@ let fps = 0
 function frame() {
   const delta = clock.getDelta() // seconds since the last frame
 
-  // when paused, freeze the simulation but keep drawing the (still) scene behind the menu
-  if (paused) {
+  // run the simulation only while playing and not paused; otherwise freeze and just draw
+  const playing = gameState === 'hiding' || gameState === 'seeking'
+  if (!playing || paused) {
     renderer.render(scene, camera)
     requestAnimationFrame(frame)
     return
+  }
+
+  // count the seek timer down; running out = win (no seeker to catch you yet)
+  if (gameState === 'seeking') {
+    seekTimeLeft -= delta
+    if (seekTimeLeft <= 0) finishSeek('win')
   }
 
   // --- UPDATE: move relative to where the camera is looking ---
@@ -291,12 +395,19 @@ function frame() {
   camera.position.copy(camPos)
   camera.lookAt(lookTarget)
 
-  // --- frames-per-second readout, refreshed about once a second ---
+  // --- HUD: phase status + fps + controls (only updates while playing) ---
   frames++
   fpsTimer += delta
   if (fpsTimer >= 1) { fps = frames; frames = 0; fpsTimer = 0 }
+  let status = ''
+  if (gameState === 'hiding') {
+    status = confirmingHide ? 'HIDING — press Y to confirm, N to cancel'
+                            : 'HIDING — press Y when you are done hiding'
+  } else if (gameState === 'seeking') {
+    status = `SEEKING — ${Math.ceil(seekTimeLeft)}s left`
+  }
   hud.textContent =
-    `state: ${gameState}\nfps: ${fps}\nclick: look · WASD: move · Space/Shift: up/down · RMB: turn · scroll: zoom · Esc: pause · F: fullscreen`
+    `${status}\nfps ${fps} · click: look · WASD: move · Space/Shift: up/down · RMB: hold to turn · scroll: zoom · Tab: pause · F: fullscreen`
 
   // --- DRAW ---
   renderer.render(scene, camera)

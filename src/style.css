@@ -20,8 +20,8 @@ canvas { display: block; }
 /* used to show/hide menus */
 .hidden { display: none !important; }
 
-/* pause overlay */
-#pause {
+/* full-screen dimmed menu layer (used by #menu, #pause, #settings, #result) */
+.overlay {
   position: fixed;
   inset: 0;
   z-index: 20;
@@ -32,37 +32,38 @@ canvas { display: block; }
   font-family: monospace;
   color: #fff;
 }
-#pause .panel {
+.overlay .panel {
   background: #1c1c22;
   border: 1px solid #444;
   border-radius: 10px;
   padding: 24px 28px;
   min-width: 260px;
   text-align: center;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
 }
-#pause h1 { font-size: 22px; margin-bottom: 16px; }
-#pause button {
-  font-family: monospace;
-  font-size: 15px;
-  color: #fff;
-  background: #3a3a46;
-  border: 1px solid #555;
-  border-radius: 6px;
-  padding: 8px 16px;
-  cursor: pointer;
+.overlay h1 { font-size: 22px; margin-bottom: 8px; }
+.overlay button {
+  font-family: monospace; font-size: 15px; color: #fff;
+  background: #3a3a46; border: 1px solid #555; border-radius: 6px;
+  padding: 8px 16px; cursor: pointer;
 }
-#pause button:hover { background: #4a4a58; }
-#pause .hint { margin-top: 14px; font-size: 12px; color: #aaa; }
-#pause label { display: block; margin-bottom: 8px; font-size: 14px; }
-#pause input {
-  font-family: monospace;
-  font-size: 15px;
-  width: 110px;
-  padding: 6px;
-  text-align: center;
-  border-radius: 6px;
-  border: 1px solid #555;
-  background: #111;
-  color: #fff;
+.overlay button:hover { background: #4a4a58; }
+.overlay .hint { font-size: 12px; color: #aaa; }
+.overlay label { font-size: 14px; }
+.overlay input {
+  font-family: monospace; font-size: 15px; width: 110px; padding: 6px;
+  text-align: center; border-radius: 6px; border: 1px solid #555;
+  background: #111; color: #fff; align-self: center;
 }
-#pause .row { margin-top: 16px; display: flex; gap: 10px; justify-content: center; }
+.overlay .row { display: flex; gap: 10px; justify-content: center; }
+
+/* small centered prompt during the hide phase */
+#confirm {
+  position: fixed;
+  left: 50%; bottom: 60px; transform: translateX(-50%);
+  z-index: 15;
+  font-family: monospace; font-size: 15px; color: #fff;
+  background: rgba(0, 0, 0, 0.6); padding: 10px 16px; border-radius: 8px;
+}

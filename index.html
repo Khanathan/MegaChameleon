@@ -8,23 +8,47 @@
   <body>
     <div id="hud"></div>
 
-    <div id="pause" class="hidden">
+    <!-- Main menu: shown at start and after each round -->
+    <div id="menu" class="overlay hidden">
+      <div class="panel">
+        <h1>MegaChameleon</h1>
+        <button id="btn-play">Play</button>
+        <button id="btn-menu-settings">Settings</button>
+      </div>
+    </div>
+
+    <!-- Pause: Esc during play -->
+    <div id="pause" class="overlay hidden">
       <div class="panel">
         <h1>Paused</h1>
-        <div id="menu-main">
-          <button id="btn-settings">Settings</button>
-          <p class="hint">Press Esc to resume</p>
-        </div>
-        <div id="menu-settings" class="hidden">
-          <label for="sens-input">Mouse sensitivity (0&ndash;10)</label>
-          <input id="sens-input" type="number" min="0" max="10" step="0.1" value="1" />
-          <div class="row">
-            <button id="btn-back">Back</button>
-            <button id="btn-apply">Apply</button>
-          </div>
+        <button id="btn-pause-settings">Settings</button>
+        <p class="hint">Press Tab to resume</p>
+      </div>
+    </div>
+
+    <!-- Shared settings, opened from the main menu or the pause menu -->
+    <div id="settings" class="overlay hidden">
+      <div class="panel">
+        <h1>Settings</h1>
+        <label for="sens-input">Mouse sensitivity (0&ndash;10)</label>
+        <input id="sens-input" type="number" min="0" max="10" step="0.1" value="1" />
+        <div class="row">
+          <button id="btn-settings-back">Back</button>
+          <button id="btn-settings-apply">Apply</button>
         </div>
       </div>
     </div>
+
+    <!-- Result screen -->
+    <div id="result" class="overlay hidden">
+      <div class="panel">
+        <h1 id="result-title">You survived!</h1>
+        <button id="btn-result-menu">Back to menu</button>
+      </div>
+    </div>
+
+    <!-- Small confirm prompt shown while hiding -->
+    <div id="confirm" class="hidden">Done hiding? Press <b>Y</b> to confirm, <b>N</b> to cancel.</div>
 
     <script type="module" src="/src/main.ts"></script>
   </body>
