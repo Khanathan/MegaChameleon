@@ -163,16 +163,121 @@ addPart(0.5,  0.5, 0.5,   0,    2.05, 0) // head
 addPart(0.2,  0.8, 0.2,  -0.62, 1.35, 0) // left arm
 addPart(0.2,  0.8, 0.2,   0.62, 1.35, 0) // right arm
 
-// a small dark "face" on the front of the head (+z) so you can tell which way it looks
-const face = new THREE.Mesh(
-  new THREE.BoxGeometry(0.3, 0.15, 0.1),
-  new THREE.MeshStandardMaterial({ color: 0x223322 })
-)
-face.position.set(0, 2.05, 0.28)
-chameleon.add(face)
-
 chameleon.position.set(0, 0, 0)
 scene.add(chameleon)
+
+// ----- The seeker: a big red Among Us crewmate (M4 preview: model + idle behavior only) -----
+// Built from primitives. +z is its front (the visor side). Origin is at its feet (y = 0).
+function makeSeeker() {
+  const g = new THREE.Group()
+  const red = new THREE.MeshStandardMaterial({ color: 0xc81e1e, roughness: 0.6 })
+  const darkRed = new THREE.MeshStandardMaterial({ color: 0x8c1414, roughness: 0.6 })
+  const visorMat = new THREE.MeshStandardMaterial({
+    color: 0xbfe9f2, roughness: 0.1, metalness: 0.1, emissive: 0x16323a, emissiveIntensity: 0.5,
+  })
+
+  const bodyR = 0.6, bodyLen = 1.0 // rounded "bean" body: ~2.2 tall, bottom sits on the floor
+  const body = new THREE.Mesh(new THREE.CapsuleGeometry(bodyR, bodyLen, 6, 16), red)
+  body.position.y = bodyR + bodyLen / 2
+  g.add(body)
+
+  const pack = new THREE.Mesh(new THREE.CapsuleGeometry(0.28, 0.9, 4, 12), darkRed) // backpack (-z)
+  pack.position.set(0, 1.05, -bodyR - 0.12)
+  g.add(pack)
+
+  const visor = new THREE.Mesh(new THREE.SphereGeometry(0.42, 24, 16), visorMat) // visor (+z)
+  visor.scale.set(1.25, 0.8, 0.6)
+  visor.position.set(0, 1.45, bodyR - 0.02)
+  g.add(visor)
+
+  const glare = new THREE.Mesh(new THREE.SphereGeometry(0.08, 10, 10), // classic visor highlight
+    new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.2 }))
+  glare.position.set(0.18, 1.55, bodyR + 0.16)
+  g.add(glare)
+
+  for (const sx of [-0.28, 0.28]) { // two stubby legs
+    const leg = new THREE.Mesh(new THREE.CapsuleGeometry(0.2, 0.18, 4, 10), red)
+    leg.position.set(sx, 0.26, 0.08)
+    g.add(leg)
+  }
+
+  g.scale.setScalar(3) // ~3x the player model
+  return g
+}
+const seeker = makeSeeker() // added to the scene only when seeking starts (see spawnSeeker)
+
+// Seeker behavior: roam the room while spinning wildly, then occasionally stop and lean in to
+// "peer at" a random spot, then roam again. No collision — it passes through everything; roam
+// targets stay inside the room so it stays in view.
+type SeekerState = 'roaming' | 'inspecting'
+let seekerState: SeekerState = 'roaming'
+let seekerTimer = 1
+const seekerTarget = new THREE.Vector3()  // where it's roaming to
+const seekerLookAt = new THREE.Vector3()  // the "thing" it stops to inspect
+const SEEKER_SPEED = 16                     // roam move speed (world units/sec)
+const SEEKER_SPIN = 70                      // wild spin (rad/sec) — ~11 turns/sec
+const SEEKER_EYE = 4.3                      // approx visor height in world units (after scaling)
+
+// roam targets float anywhere in the room volume; y stays in bounds so it can't leave the room
+function pickRoamTarget() {
+  seekerTarget.set((Math.random() * 2 - 1) * 18, 2 + Math.random() * 18, (Math.random() * 2 - 1) * 18)
+}
+function pickInspectTarget() { // a random spot anywhere in the room volume to peer at
+  seekerLookAt.set((Math.random() * 2 - 1) * 22, 1 + Math.random() * 22, (Math.random() * 2 - 1) * 22)
+}
+pickRoamTarget()
+
+// turn an angle toward a target by the shortest way
+function approachAngle(current: number, target: number, t: number) {
+  const diff = Math.atan2(Math.sin(target - current), Math.cos(target - current))
+  return current + diff * Math.min(1, t)
+}
+
+function updateSeeker(delta: number) {
+  seekerTimer -= delta
+  if (seekerState === 'roaming') {
+    seeker.rotation.y += SEEKER_SPIN * delta                            // spin wildly
+    seeker.rotation.x += (0 - seeker.rotation.x) * Math.min(1, delta * 8) // straighten back up
+    // drift toward the roam target in 3D (floats up and sinks down too)
+    const dx = seekerTarget.x - seeker.position.x
+    const dy = seekerTarget.y - seeker.position.y
+    const dz = seekerTarget.z - seeker.position.z
+    const dist = Math.hypot(dx, dy, dz)
+    if (dist > 0.001) {
+      const step = Math.min(dist, SEEKER_SPEED * delta)
+      seeker.position.x += (dx / dist) * step
+      seeker.position.y += (dy / dist) * step
+      seeker.position.z += (dz / dist) * step
+    }
+    if (dist < 1.5 || seekerTimer <= 0) {                              // arrived or bored -> inspect
+      seekerState = 'inspecting'
+      seekerTimer = 0.5 + Math.random() * 1.0                          // peer for 0.5-1.5s
+      pickInspectTarget()
+    }
+  } else {
+    const dx = seekerLookAt.x - seeker.position.x
+    const dz = seekerLookAt.z - seeker.position.z
+    seeker.rotation.y = approachAngle(seeker.rotation.y, Math.atan2(dx, dz), delta * 10) // face it
+    let pitch = -Math.atan2(seekerLookAt.y - SEEKER_EYE, Math.hypot(dx, dz)) // lean to peer at it
+    pitch = Math.max(-0.5, Math.min(0.5, pitch))
+    seeker.rotation.x += (pitch - seeker.rotation.x) * Math.min(1, delta * 8)
+    if (seekerTimer <= 0) {                                            // done peering -> roam again
+      seekerState = 'roaming'
+      seekerTimer = 1 + Math.random() * 1.5
+      pickRoamTarget()
+    }
+  }
+}
+
+// add the seeker to the scene and reset it; called when the seek phase begins
+function spawnSeeker() {
+  seeker.position.set(10, 6, -8)
+  seeker.rotation.set(0, 0, 0)
+  seekerState = 'roaming'
+  seekerTimer = 1
+  pickRoamTarget()
+  scene.add(seeker)
+}
 
 // ----- Keyboard input: remember which keys are held down -----
 const keys: Record<string, boolean> = {}
@@ -217,8 +322,8 @@ window.addEventListener('mouseup', (e) => { if (e.button === 2) rotatingModel = 
 window.addEventListener('mousemove', (e) => {
   if (document.pointerLockElement !== canvas) return // only when the mouse is captured
   const s = BASE_SENSITIVITY * sensitivity // current look speed (sensitivity 0-10 from the menu)
-  if (rotatingModel) {
-    chameleon.rotation.y -= e.movementX * s // turn the model left/right
+  if (rotatingModel && gameState === 'hiding') {
+    chameleon.rotation.y -= e.movementX * s // turn the model left/right (hide phase only)
   } else {
     camYaw -= e.movementX * s               // orbit the camera
     camPitch -= e.movementY * s
@@ -267,6 +372,7 @@ function setState(next: GameState) {
   }
   if (next === 'menu') screens.menu.classList.remove('hidden')
   if (next === 'result') screens.result.classList.remove('hidden')
+  if (next !== 'seeking') scene.remove(seeker) // the seeker only exists during the seek phase
   // 'hiding' and 'seeking' show no overlay — you're in the game
 }
 
@@ -279,7 +385,10 @@ function startRound() {
 const SEEK_SECONDS = 30
 function startSeek() {
   seekTimeLeft = SEEK_SECONDS
+  spawnSeeker()
+  freeCamPos.copy(camera.position) // start the free-fly camera where we were watching from
   setState('seeking')
+  canvas.requestPointerLock() // capture the mouse so you can look around right away
 }
 function finishSeek(result: 'win' | 'lose') {
   outcome = result
@@ -528,7 +637,7 @@ function paintAt(e: MouseEvent) {
   lastUV = { part: spot.part, x: spot.x, y: spot.y }
 }
 
-// fill = repaint every part's whole canvas the current color (the dark face stays as it is)
+// fill = repaint every part's whole canvas the current color
 function fillAll() {
   for (const part of paintableParts) {
     const { ctx, texture } = part.userData as { ctx: CanvasRenderingContext2D; texture: THREE.CanvasTexture }
@@ -607,6 +716,8 @@ window.addEventListener('resize', () => {
 // ----- Settings reused every frame -----
 const MOVE_SPEED = 6                  // horizontal units per second
 const FLOAT_SPEED = 4                 // vertical units per second (Space up / Shift down)
+const FLY_SPEED = 16                  // free-fly camera speed during the seek phase
+const freeCamPos = new THREE.Vector3() // the free-fly camera's position (seek phase)
 const BODY_HX = 0.72                  // model half-width (arms reach widest)
 const BODY_HY = 1.15                  // model half-height (feet to head)
 const BODY_HZ = 0.33                  // model half-depth (front to back)
@@ -634,77 +745,103 @@ function frame() {
     return
   }
 
-  // count the seek timer down; running out = win (no seeker to catch you yet)
+  // count the seek timer down; running out = win (the seeker can't catch you yet)
   if (gameState === 'seeking') {
     seekTimeLeft -= delta
     if (seekTimeLeft <= 0) finishSeek('win')
   }
 
-  if (paintMode) {
-    // painting: the body stays put; A/D only spin it in place so you can reach every side
-    const TURN_SPEED = 1.6 // radians per second
-    if (keys['a'] || keys['arrowleft'])  chameleon.rotation.y += TURN_SPEED * delta
-    if (keys['d'] || keys['arrowright']) chameleon.rotation.y -= TURN_SPEED * delta
-  } else {
-    // --- UPDATE: move relative to where the camera is looking ---
-    // The model's facing is NOT touched here; only the right mouse button turns it.
-    const forwardX = -Math.sin(camYaw)
-    const forwardZ = -Math.cos(camYaw)
-    const rightX = Math.cos(camYaw)
-    const rightZ = -Math.sin(camYaw)
+  if (gameState === 'seeking') {
+    // --- SEEK PHASE: the chameleon is fixed; fly the camera around freely to watch the seeker ---
+    updateSeeker(delta) // seeker roams + peers around (no catch logic yet)
 
-    let drive = 0  // forward / back
-    let strafe = 0 // right / left
+    const cosP = Math.cos(camPitch)
+    // forward = where you're looking (includes up/down); right = horizontal
+    const fwdX = -Math.sin(camYaw) * cosP, fwdY = Math.sin(camPitch), fwdZ = -Math.cos(camYaw) * cosP
+    const rightX = Math.cos(camYaw), rightZ = -Math.sin(camYaw)
+
+    let drive = 0, strafe = 0, lift = 0
     if (keys['w'] || keys['arrowup']) drive += 1
     if (keys['s'] || keys['arrowdown']) drive -= 1
     if (keys['d'] || keys['arrowright']) strafe += 1
     if (keys['a'] || keys['arrowleft']) strafe -= 1
-
-    let moveX = forwardX * drive + rightX * strafe
-    let moveZ = forwardZ * drive + rightZ * strafe
-    if (moveX !== 0 || moveZ !== 0) {
-      const len = Math.hypot(moveX, moveZ) // so diagonals aren't faster
-      moveX /= len
-      moveZ /= len
-      chameleon.position.x += moveX * MOVE_SPEED * delta
-      chameleon.position.z += moveZ * MOVE_SPEED * delta
-    }
-
-    // --- float up (Space) or sink down (Shift); it hovers when neither is held ---
-    let lift = 0
     if (keys[' ']) lift += 1
     if (keys['shift']) lift -= 1
-    chameleon.position.y += lift * FLOAT_SPEED * delta
+
+    freeCamPos.x += (fwdX * drive + rightX * strafe) * FLY_SPEED * delta
+    freeCamPos.y += (fwdY * drive + lift) * FLY_SPEED * delta
+    freeCamPos.z += (fwdZ * drive + rightZ * strafe) * FLY_SPEED * delta
+    // keep the camera inside the room
+    freeCamPos.x = Math.max(-(halfW - CAM_MARGIN), Math.min(halfW - CAM_MARGIN, freeCamPos.x))
+    freeCamPos.z = Math.max(-(halfD - CAM_MARGIN), Math.min(halfD - CAM_MARGIN, freeCamPos.z))
+    freeCamPos.y = Math.max(0.5, Math.min(ROOM.height - 0.5, freeCamPos.y))
+    camera.position.copy(freeCamPos)
+    camera.lookAt(freeCamPos.x + fwdX, freeCamPos.y + fwdY, freeCamPos.z + fwdZ)
+  } else {
+    // --- HIDE PHASE: move/paint the chameleon, collide it, orbit the camera around it ---
+    if (paintMode) {
+      // painting: the body stays put; A/D only spin it in place so you can reach every side
+      const TURN_SPEED = 1.6 // radians per second
+      if (keys['a'] || keys['arrowleft'])  chameleon.rotation.y += TURN_SPEED * delta
+      if (keys['d'] || keys['arrowright']) chameleon.rotation.y -= TURN_SPEED * delta
+    } else {
+      // move relative to where the camera is looking; the model's facing is NOT touched here
+      const forwardX = -Math.sin(camYaw)
+      const forwardZ = -Math.cos(camYaw)
+      const rightX = Math.cos(camYaw)
+      const rightZ = -Math.sin(camYaw)
+
+      let drive = 0  // forward / back
+      let strafe = 0 // right / left
+      if (keys['w'] || keys['arrowup']) drive += 1
+      if (keys['s'] || keys['arrowdown']) drive -= 1
+      if (keys['d'] || keys['arrowright']) strafe += 1
+      if (keys['a'] || keys['arrowleft']) strafe -= 1
+
+      let moveX = forwardX * drive + rightX * strafe
+      let moveZ = forwardZ * drive + rightZ * strafe
+      if (moveX !== 0 || moveZ !== 0) {
+        const len = Math.hypot(moveX, moveZ) // so diagonals aren't faster
+        moveX /= len
+        moveZ /= len
+        chameleon.position.x += moveX * MOVE_SPEED * delta
+        chameleon.position.z += moveZ * MOVE_SPEED * delta
+      }
+
+      // float up (Space) or sink down (Shift); it hovers when neither is held
+      let lift = 0
+      if (keys[' ']) lift += 1
+      if (keys['shift']) lift -= 1
+      chameleon.position.y += lift * FLOAT_SPEED * delta
+    }
+
+    // collision: keep the model's box inside the room on all three axes. We read the model's
+    // rotation to find how far its box reaches along each world axis (its "shadow" on that axis).
+    chameleon.updateMatrix()
+    const m = chameleon.matrix.elements
+    const ex = Math.abs(m[0]) * BODY_HX + Math.abs(m[4]) * BODY_HY + Math.abs(m[8]) * BODY_HZ
+    const ey = Math.abs(m[1]) * BODY_HX + Math.abs(m[5]) * BODY_HY + Math.abs(m[9]) * BODY_HZ
+    const ez = Math.abs(m[2]) * BODY_HX + Math.abs(m[6]) * BODY_HY + Math.abs(m[10]) * BODY_HZ
+    bodyCenter.set(0, BODY_HY, 0).applyQuaternion(chameleon.quaternion) // box centre above the feet
+    const innerX = halfW - t / 2
+    const innerZ = halfD - t / 2
+    chameleon.position.x = Math.max(-(innerX - ex) - bodyCenter.x, Math.min(innerX - ex - bodyCenter.x, chameleon.position.x))
+    chameleon.position.z = Math.max(-(innerZ - ez) - bodyCenter.z, Math.min(innerZ - ez - bodyCenter.z, chameleon.position.z))
+    chameleon.position.y = Math.max(ey - bodyCenter.y, Math.min(ROOM.height - ey - bodyCenter.y, chameleon.position.y))
+
+    // orbit the camera around the chameleon, staying inside the room
+    lookTarget.copy(chameleon.position)
+    lookTarget.y += TORSO_HEIGHT // look at the torso, not the feet
+    const dist = BASE_DISTANCE * zoom
+    const cosP = Math.cos(camPitch)
+    camPos.set(Math.sin(camYaw) * cosP, Math.sin(camPitch), Math.cos(camYaw) * cosP)
+    camPos.multiplyScalar(dist).add(lookTarget)
+    camPos.x = Math.max(-(halfW - CAM_MARGIN), Math.min(halfW - CAM_MARGIN, camPos.x))
+    camPos.z = Math.max(-(halfD - CAM_MARGIN), Math.min(halfD - CAM_MARGIN, camPos.z))
+    camPos.y = Math.max(0.5, camPos.y) // never drop below the floor
+    camera.position.copy(camPos)
+    camera.lookAt(lookTarget)
   }
-
-  // --- collision: keep the model's box inside the room on all three axes ---
-  // We read the model's rotation to find how far its box reaches along each world axis
-  // (its "shadow" on that axis). A flat side touches a wall/floor/ceiling with no gap; a
-  // turn that would poke through tightens the limit and pushes the model back out.
-  chameleon.updateMatrix()
-  const m = chameleon.matrix.elements
-  const ex = Math.abs(m[0]) * BODY_HX + Math.abs(m[4]) * BODY_HY + Math.abs(m[8]) * BODY_HZ
-  const ey = Math.abs(m[1]) * BODY_HX + Math.abs(m[5]) * BODY_HY + Math.abs(m[9]) * BODY_HZ
-  const ez = Math.abs(m[2]) * BODY_HX + Math.abs(m[6]) * BODY_HY + Math.abs(m[10]) * BODY_HZ
-  bodyCenter.set(0, BODY_HY, 0).applyQuaternion(chameleon.quaternion) // box centre above the feet
-  const innerX = halfW - t / 2
-  const innerZ = halfD - t / 2
-  chameleon.position.x = Math.max(-(innerX - ex) - bodyCenter.x, Math.min(innerX - ex - bodyCenter.x, chameleon.position.x))
-  chameleon.position.z = Math.max(-(innerZ - ez) - bodyCenter.z, Math.min(innerZ - ez - bodyCenter.z, chameleon.position.z))
-  chameleon.position.y = Math.max(ey - bodyCenter.y, Math.min(ROOM.height - ey - bodyCenter.y, chameleon.position.y))
-
-  // --- orbit the camera around the chameleon, staying inside the room ---
-  lookTarget.copy(chameleon.position)
-  lookTarget.y += TORSO_HEIGHT // look at the torso, not the feet
-  const dist = BASE_DISTANCE * zoom
-  const cosP = Math.cos(camPitch)
-  camPos.set(Math.sin(camYaw) * cosP, Math.sin(camPitch), Math.cos(camYaw) * cosP)
-  camPos.multiplyScalar(dist).add(lookTarget)
-  camPos.x = Math.max(-(halfW - CAM_MARGIN), Math.min(halfW - CAM_MARGIN, camPos.x))
-  camPos.z = Math.max(-(halfD - CAM_MARGIN), Math.min(halfD - CAM_MARGIN, camPos.z))
-  camPos.y = Math.max(0.5, camPos.y) // never drop below the floor
-  camera.position.copy(camPos)
-  camera.lookAt(lookTarget)
 
   // --- HUD: phase status + fps + controls (only updates while playing) ---
   frames++
@@ -720,6 +857,7 @@ function frame() {
                             : 'HIDING — press Y when done · Q: paint'
   } else if (gameState === 'seeking') {
     status = `SEEKING — ${Math.ceil(seekTimeLeft)}s left`
+    controls = 'WASD: fly · Space/Shift: up/down · mouse: look · scroll: — · Tab: pause · F: fullscreen'
   }
   hud.textContent = `${status}\nfps ${fps} · ${controls}`
 
