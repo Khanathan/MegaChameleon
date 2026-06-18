@@ -23,3 +23,6 @@ dist-ssr
 *.sln
 *.sw?
 .vercel
+
+# Claude Code instructions (kept local, not tracked)
+CLAUDE.md
