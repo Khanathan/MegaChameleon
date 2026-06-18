@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>MegaChameleon</title>
+  </head>
+  <body>
+    <div id="hud"></div>
+
+    <div id="pause" class="hidden">
+      <div class="panel">
+        <h1>Paused</h1>
+        <div id="menu-main">
+          <button id="btn-settings">Settings</button>
+          <p class="hint">Press Esc to resume</p>
+        </div>
+        <div id="menu-settings" class="hidden">
+          <label for="sens-input">Mouse sensitivity (0&ndash;10)</label>
+          <input id="sens-input" type="number" min="0" max="10" step="0.1" value="1" />
+          <div class="row">
+            <button id="btn-back">Back</button>
+            <button id="btn-apply">Apply</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
