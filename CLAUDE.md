@@ -38,10 +38,37 @@ any TypeScript error.
 
 ## Current state
 
-Phase 0–2 of the build plan are done: a working skeleton. `src/main.ts` sets up the
-renderer, a fixed-size room (floor + 4 walls), a third-person camera, lights, a placeholder
-spinning box, an on-screen HUD (game state + FPS), and the game loop. No real gameplay yet —
-the chameleon, controls, painting, seeker AI, and the level system are still to come.
+Milestones 1 and 2 are done (see the build order in `claudehelp/plan.md`). The whole game is
+in `src/main.ts` (one file for now); `index.html` holds the menu overlays and `src/style.css`
+the styling.
+
+- **Room:** an enclosed 50×50×30 box (floor, 4 walls, ceiling), pink-toned.
+- **Chameleon:** a blocky humanoid built from grouped boxes — a placeholder for a real model.
+- **Movement/camera:** camera-relative WASD, Space/Shift to float up/down, right-mouse to
+  turn the model (yaw only), an orbit camera via pointer-lock mouse-look, scroll to zoom.
+  Full 3D collision keeps the body flush against walls/floor/ceiling (no gap, no clipping),
+  computed from the model's rotation matrix ("box shadow" on each axis).
+- **Round flow:** a `gameState` machine (`menu → hiding → seeking → result`) decides which
+  overlay shows and whether the sim runs. Main menu (Play, Settings), hide phase, a 30-second
+  seek with countdown, and a result screen, plus a shared Settings panel (mouse sensitivity).
+
+Still to come: painting (M3), seeker AI + suspicion meter (M4), `LevelProvider` + built-in
+maps (M5), image→room upload (M6), polish/deploy (M7).
+
+## Decisions & gotchas to respect (don't "fix" these backwards)
+
+- **Pause is Tab, not Esc.** Esc is hard-bound by browsers to release pointer lock AND exit
+  fullscreen, and can't be `preventDefault`-ed — so Esc-as-pause kept dropping fullscreen. Tab
+  has no such binding and still fires while the mouse is captured, so we pause/resume on Tab
+  and re-capture the mouse on resume. Esc still works as a fallback (its unlock is caught by
+  `pointerlockchange`).
+- **Fullscreen vs pause:** toggling fullscreen (F) briefly drops pointer lock; we record the
+  toggle time and ignore that unlock in `pointerlockchange` (so F doesn't pause), then re-grab
+  the lock on `fullscreenchange`. Preserve this if you touch the pause/lock code.
+- **TEMP backdoor:** during `seeking`, `Shift+Y` ends the seek early (always a win). **Remove
+  it in Milestone 4** once the real seeker can end the round.
+- **`noUnusedLocals` is on:** a variable that's only assigned but never read fails
+  `npm run build`. Read it somewhere or remove it.
 
 ## Intended architecture (build toward this)
 
@@ -74,6 +101,10 @@ The game loop, seeker AI, and painting UI only ever see a `LevelDefinition`.
   (the account Claude Code runs as). Do not mix in another account — it causes file-ownership
   and git "dubious ownership" problems.
 - A global gitignore (`~/.gitignore_global`) ignores any `claudehelp/` folder. Treat
-  `claudehelp/` as local scratch that is never committed. The detailed design notes
-  (`plan.md`, `p1plan.md`) live there, so they are **not** in a fresh clone — keep the
-  essentials in this file.
+  `claudehelp/` as local scratch that is never committed. The detailed design + step-by-step
+  plans (`plan.md` for the high-level milestones, `m1plan.md`/`m2plan.md`/… per milestone)
+  live there, so they are **not** in a fresh clone — keep the essentials in this file, and
+  read the relevant `mNplan.md` before starting a milestone.
+- **Milestone git flow:** do each milestone on a `milestone-N-...` branch, commit, merge
+  fast-forward into `main`, push, then delete the branch. The user edits `README.md` directly
+  on GitHub, so `pull --rebase` if a push is rejected (changes won't conflict with `src/`).
