@@ -20,6 +20,25 @@ canvas { display: block; }
 /* used to show/hide menus */
 .hidden { display: none !important; }
 
+/* how-to-play card, pinned top-right (shown during the hide phase) */
+#howto {
+  position: fixed;
+  top: 12px;
+  right: 12px;
+  z-index: 10;
+  font-family: monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  color: #ddd;
+  background: rgba(0, 0, 0, 0.45);
+  padding: 10px 12px;
+  border-radius: 6px;
+  pointer-events: none;   /* clicks pass through to the game */
+}
+#howto .howto-title { font-size: 13px; font-weight: bold; color: #fff; margin-bottom: 4px; }
+#howto div { white-space: nowrap; }
+#howto b { color: #ffd9e1; } /* highlight the keys */
+
 /* full-screen dimmed menu layer (used by #menu, #pause, #settings, #result) */
 .overlay {
   position: fixed;
@@ -60,7 +79,7 @@ canvas { display: block; }
 .overlay .row { display: flex; gap: 10px; justify-content: center; }
 
 /* map picker on the main menu */
-#map-list { display: flex; gap: 8px; justify-content: center; margin-bottom: 6px; }
+#map-list { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; margin-bottom: 6px; }
 .map-btn {
   font-family: monospace; font-size: 13px; color: #fff;
   background: #2a2a33; border: 1px solid #555; border-radius: 6px; padding: 6px 12px; cursor: pointer;
