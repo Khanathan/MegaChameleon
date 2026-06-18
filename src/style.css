@@ -59,6 +59,15 @@ canvas { display: block; }
 }
 .overlay .row { display: flex; gap: 10px; justify-content: center; }
 
+/* map picker on the main menu */
+#map-list { display: flex; gap: 8px; justify-content: center; margin-bottom: 6px; }
+.map-btn {
+  font-family: monospace; font-size: 13px; color: #fff;
+  background: #2a2a33; border: 1px solid #555; border-radius: 6px; padding: 6px 12px; cursor: pointer;
+}
+.map-btn:hover { background: #3a3a46; }
+.map-btn.selected { background: #5a5a70; border-color: #aaa; }
+
 /* small centered prompt during the hide phase */
 #confirm {
   position: fixed;

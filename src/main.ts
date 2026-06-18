@@ -44,36 +44,35 @@ const sun = new THREE.DirectionalLight(0xffffff, 0.45)        // gentle form, no
 sun.position.set(12, 30, 18)
 scene.add(sun)
 
-// ----- The room: a floor and four walls -----
+// ----- A room is data: a LevelDefinition that a LevelProvider hands back. The game never builds
+// the room directly — loadLevel() (below) turns a definition into meshes. -----
+type Surface = { color: string } | { image: string } // a flat color or an image url
+interface Obstacle { size: [number, number, number]; pos: [number, number, number]; surface: Surface }
+interface LevelDefinition {
+  name: string
+  size: { width: number; depth: number; height: number }
+  surfaces: { floor: Surface; ceiling: Surface; back: Surface; front: Surface; left: Surface; right: Surface }
+  palette: string[]            // paint-toolbar swatches
+  obstacles: Obstacle[]
+  seekerStart: [number, number, number]
+}
+interface LevelProvider { getLevel(id: string): Promise<LevelDefinition> }
+
+// current room size — updated by loadLevel; the collision + camera clamps read these every frame
 const ROOM = { width: 50, depth: 50, height: 30 }
-const halfW = ROOM.width / 2
-const halfD = ROOM.depth / 2
+let halfW = ROOM.width / 2
+let halfD = ROOM.depth / 2
 const t = 0.2 // wall thickness
-const environment: THREE.Mesh[] = [] // room surfaces the eyedropper can sample colors from
+const environment: THREE.Mesh[] = [] // current room's surfaces (walls/floor/ceiling/obstacles)
+const levelMeshes: THREE.Mesh[] = [] // everything loadLevel made, kept so we can dispose on a swap
+// obstacle boxes (center + half-extents) the chameleon collides against, so it can't pass through
+const obstacleBoxes: { x: number; y: number; z: number; hx: number; hy: number; hz: number }[] = []
+let seekerStart: [number, number, number] = [10, 6, -8] // where the seeker spawns (set per level)
 
-const floor = new THREE.Mesh(
-  new THREE.BoxGeometry(ROOM.width, 0.2, ROOM.depth),
-  new THREE.MeshStandardMaterial({ color: 0xE8B0BE }) // floor: darker pink than the walls
-)
-floor.position.y = -0.1
-scene.add(floor)
-environment.push(floor)
-
-const ceiling = new THREE.Mesh(
-  new THREE.BoxGeometry(ROOM.width, 0.2, ROOM.depth),
-  new THREE.MeshStandardMaterial({ color: 0xFFE9EF }) // ceiling: lighter pink than the walls
-)
-ceiling.position.y = ROOM.height + 0.1 // bottom face sits at the top of the walls
-scene.add(ceiling)
-environment.push(ceiling)
-
-const wallMaterial = new THREE.MeshStandardMaterial({ color: 0xFFD9E1 })
-
-// Build a wall material from an image. We use a FIXED 512x512 canvas (a power-of-two size, and
-// never resized after the texture is made — resizing it later can leave the GPU texture stuck
-// blank/black). It starts as a grey placeholder, then the image is drawn in once it loads. The
-// canvas backs the texture so the eyedropper can read its pixels. The image stretches to fill the
-// wall; matching its shape isn't needed.
+// Build an image-backed material. A FIXED 512x512 canvas (a power-of-two size, and never resized
+// after the texture is made — resizing it later can leave the GPU texture stuck blank/black). It
+// starts grey, then the image is drawn in once it loads. The canvas backs the texture so the
+// eyedropper + seeker can read its pixels. The image stretches to fill the surface.
 function makeImageWall(imageUrl: string) {
   const SIZE = 512
   const canvas = document.createElement('canvas')
@@ -93,21 +92,26 @@ function makeImageWall(imageUrl: string) {
   return { material, userData: { canvas, ctx, texture } }
 }
 
-function makeWall(
-  w: number, h: number, d: number, x: number, y: number, z: number,
-  material: THREE.Material = wallMaterial, userData: Record<string, unknown> = {}
-) {
-  const wall = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), material)
-  wall.position.set(x, y, z)
-  wall.userData = userData
-  scene.add(wall)
-  environment.push(wall)
+// build one box (wall/floor/ceiling/obstacle), flat-color or image, and register it as part of
+// the room: into the scene, into `environment` (so the eyedropper + seeker see it), and into
+// `levelMeshes` (so a map swap can dispose it).
+function buildBox(w: number, h: number, d: number, x: number, y: number, z: number, s: Surface) {
+  let material: THREE.Material
+  let userData: Record<string, unknown> = {}
+  if ('image' in s) {
+    const img = makeImageWall(s.image)
+    material = img.material
+    userData = img.userData
+  } else {
+    material = new THREE.MeshStandardMaterial({ color: s.color })
+  }
+  const mesh = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), material)
+  mesh.position.set(x, y, z)
+  mesh.userData = userData
+  scene.add(mesh)
+  environment.push(mesh)
+  levelMeshes.push(mesh)
 }
-const amogusWall = makeImageWall(amogusUrl)
-makeWall(ROOM.width, ROOM.height, t, 0, ROOM.height / 2, -halfD, amogusWall.material, amogusWall.userData) // back: image
-makeWall(ROOM.width, ROOM.height, t, 0, ROOM.height / 2, halfD)  // front
-makeWall(t, ROOM.height, ROOM.depth, -halfW, ROOM.height / 2, 0) // left
-makeWall(t, ROOM.height, ROOM.depth, halfW, ROOM.height / 2, 0)  // right
 
 // ----- The chameleon: a simple blocky humanoid -----
 // We treat +z as "forward" (the face side). The group's origin is at the feet (y = 0).
@@ -202,6 +206,9 @@ function makeSeeker() {
     g.add(leg)
   }
 
+  // shift every part down so the group's origin sits at the body's centre (the capsule middle, at
+  // local y = bodyR + bodyLen/2). Then the seeker tumbles about its middle, not its feet.
+  for (const part of g.children) part.position.y -= bodyR + bodyLen / 2
   g.scale.setScalar(3) // ~3x the player model
   return g
 }
@@ -224,7 +231,7 @@ const seekerTarget = new THREE.Vector3()  // where it's roaming to
 const seekerLookAt = new THREE.Vector3()  // the "thing" it stops to inspect
 const SEEKER_SPEED = 20                     // roam move speed (world units/sec)
 const SEEKER_SPIN = 150                      // wild spin (rad/sec) — ~11 turns/sec
-const SEEKER_EYE = 4.3                      // approx visor height in world units (after scaling)
+const SEEKER_EYE = 1.05                     // visor height above the group origin/centre (scaled)
 
 // roam targets float anywhere in the room volume; y stays in bounds so it can't leave the room
 function pickRoamTarget() {
@@ -250,8 +257,10 @@ function approachAngle(current: number, target: number, t: number) {
 function updateSeeker(delta: number) {
   seekerTimer -= delta
   if (seekerState === 'roaming') {
-    seeker.rotation.y += SEEKER_SPIN * delta                            // spin wildly
-    seeker.rotation.x += (0 - seeker.rotation.x) * Math.min(1, delta * 8) // straighten back up
+    // tumble wildly in 3D — different rates per axis so it spins chaotically, not around one line
+    seeker.rotation.x += SEEKER_SPIN * 0.7 * delta
+    seeker.rotation.y += SEEKER_SPIN * delta
+    seeker.rotation.z += SEEKER_SPIN * 0.45 * delta
     // drift toward the roam target in 3D (floats up and sinks down too)
     const dx = seekerTarget.x - seeker.position.x
     const dy = seekerTarget.y - seeker.position.y
@@ -271,10 +280,13 @@ function updateSeeker(delta: number) {
   } else {
     const dx = seekerLookAt.x - seeker.position.x
     const dz = seekerLookAt.z - seeker.position.z
+    // stop tumbling and settle to face the target: shortest-angle ease handles the big spin we
+    // accumulated, and z un-rolls so it peers upright
     seeker.rotation.y = approachAngle(seeker.rotation.y, Math.atan2(dx, dz), delta * 10) // face it
-    let pitch = -Math.atan2(seekerLookAt.y - SEEKER_EYE, Math.hypot(dx, dz)) // lean to peer at it
+    let pitch = -Math.atan2(seekerLookAt.y - (seeker.position.y + SEEKER_EYE), Math.hypot(dx, dz)) // lean to peer
     pitch = Math.max(-0.5, Math.min(0.5, pitch))
-    seeker.rotation.x += (pitch - seeker.rotation.x) * Math.min(1, delta * 8)
+    seeker.rotation.x = approachAngle(seeker.rotation.x, pitch, delta * 8)
+    seeker.rotation.z = approachAngle(seeker.rotation.z, 0, delta * 8)
     if (seekerTimer <= 0) {                                            // done peering -> roam again
       seekerState = 'roaming'
       seekerTimer = 1 + Math.random() * 1.5
@@ -285,7 +297,7 @@ function updateSeeker(delta: number) {
 
 // add the seeker to the scene and reset it; called when the seek phase begins
 function spawnSeeker() {
-  seeker.position.set(10, 6, -8)
+  seeker.position.set(seekerStart[0], seekerStart[1], seekerStart[2])
   seeker.rotation.set(0, 0, 0)
   seekerState = 'roaming'
   seekerTimer = 1
@@ -348,7 +360,7 @@ function colorDist(a: THREE.Color, b: THREE.Color) {
   return Math.hypot(a.r - b.r, a.g - b.g, a.b - b.b)
 }
 
-const detectTargets = [...paintableParts, ...environment] // everything the seeker's ray can hit
+let detectTargets: THREE.Mesh[] = [] // everything the seeker's ray can hit (rebuilt per level)
 const VIEW_COS = Math.cos((70 * Math.PI) / 180) // very wide view cone — the wild spin sweeps it
                                                  // fast, so it's effectively "scanning" almost everywhere
 const MAX_SEE = 80                               // too far past this to notice
@@ -362,7 +374,7 @@ const _n = new THREE.Vector3()
 
 function updateSuspicion(dt: number) {
   seeker.updateMatrixWorld()
-  _eye.set(0, 1.45, 0.55).applyMatrix4(seeker.matrixWorld)         // visor (eye) world position
+  _eye.set(0, 0.35, 0.55).applyMatrix4(seeker.matrixWorld)         // visor (eye) world position (local)
   _fwd.set(0, 0, 1).applyQuaternion(seeker.quaternion).normalize() // where it's looking
   _cham.copy(chameleon.position); _cham.y += 1.35                  // aim at the torso
   _toCham.copy(_cham).sub(_eye)
@@ -410,7 +422,8 @@ function updateCaught(delta: number) {
   seeker.rotation.y = approachAngle(seeker.rotation.y, Math.atan2(dx, dz), delta * 6)
   let pitch = -Math.atan2(_cham.y - (seeker.position.y + SEEKER_EYE), Math.hypot(dx, dz))
   pitch = Math.max(-0.8, Math.min(0.8, pitch))
-  seeker.rotation.x += (pitch - seeker.rotation.x) * Math.min(1, delta * 6)
+  seeker.rotation.x = approachAngle(seeker.rotation.x, pitch, delta * 6) // un-tumble to a dead stare
+  seeker.rotation.z = approachAngle(seeker.rotation.z, 0, delta * 6)
   if (caughtTimer <= 0) finishSeek('lose')
 }
 
@@ -441,6 +454,8 @@ window.addEventListener('keydown', (e) => {
 const canvas = renderer.domElement
 const BASE_SENSITIVITY = 0.0025 // look speed at sensitivity = 1
 let sensitivity = 1             // mouse-sensitivity multiplier (0-10), set from the pause menu
+const DEFAULT_MOVE_SPEED = 8    // chameleon walk speed (units/sec); changeable in Settings
+let moveSpeed = DEFAULT_MOVE_SPEED
 let camYaw = 0         // camera angle around the player (left/right)
 let camPitch = 0.5     // camera angle up/down (radians)
 const PITCH_MIN = -1.55 // look up from almost directly below the chameleon
@@ -488,6 +503,9 @@ const screens = {
 const confirmEl = document.getElementById('confirm') as HTMLDivElement
 const resultTitle = document.getElementById('result-title') as HTMLHeadingElement
 const sensInput = document.getElementById('sens-input') as HTMLInputElement
+const speedInput = document.getElementById('speed-input') as HTMLInputElement
+const speedNote = document.getElementById('speed-note') as HTMLParagraphElement
+speedNote.textContent = `Default: ${DEFAULT_MOVE_SPEED}` // small note of the default speed
 let settingsReturn: 'menu' | 'pause' = 'menu' // which menu Settings returns to
 
 function hideAllScreens() {
@@ -536,6 +554,7 @@ function finishSeek(result: 'win' | 'lose') {
 function openSettings(returnTo: 'menu' | 'pause') {
   settingsReturn = returnTo
   sensInput.value = String(sensitivity)
+  speedInput.value = String(moveSpeed)
   hideAllScreens()
   screens.settings.classList.remove('hidden')
 }
@@ -627,6 +646,9 @@ document.getElementById('btn-settings-apply')!.addEventListener('click', () => {
   const v = parseFloat(sensInput.value)
   if (!Number.isNaN(v)) sensitivity = Math.max(0, Math.min(10, v))
   sensInput.value = String(sensitivity) // reflect the clamped value
+  const sp = parseFloat(speedInput.value)
+  if (!Number.isNaN(sp)) moveSpeed = Math.max(1, Math.min(20, sp))
+  speedInput.value = String(moveSpeed) // reflect the clamped value
 })
 
 setState('menu') // start on the main menu
@@ -640,9 +662,6 @@ const swatchesEl = document.getElementById('swatches') as HTMLSpanElement
 type Tool = 'pencil' | 'brush' | 'fill' | 'pick'
 let currentTool: Tool | null = 'pencil' // null = no tool, normal cursor
 let currentColor = SKIN
-
-// stand-in palette = the room's current colors; Milestone 5's LevelProvider replaces this
-const ROOM_PALETTE = ['#FFD9E1', '#E8B0BE', '#FFE9EF', '#6abf69', '#ffffff', '#222222']
 
 function setColor(hex: string) {
   currentColor = hex
@@ -709,13 +728,16 @@ function selectTool(tool: Tool) {
 // number-key shortcuts: 1 pencil · 2 brush · 3 fill · 4 pick (handled in the keydown above)
 const TOOL_KEYS: Record<string, Tool> = { '1': 'pencil', '2': 'brush', '3': 'fill', '4': 'pick' }
 
-// build the swatch buttons from the palette
-for (const hex of ROOM_PALETTE) {
-  const s = document.createElement('span')
-  s.className = 'swatch'
-  s.style.background = hex
-  s.addEventListener('click', () => setColor(hex))
-  swatchesEl.appendChild(s)
+// (re)build the swatch buttons from a level's palette; called by loadLevel
+function buildSwatches(palette: string[]) {
+  swatchesEl.innerHTML = ''
+  for (const hex of palette) {
+    const s = document.createElement('span')
+    s.className = 'swatch'
+    s.style.background = hex
+    s.addEventListener('click', () => setColor(hex))
+    swatchesEl.appendChild(s)
+  }
 }
 colorInput.addEventListener('input', () => setColor(colorInput.value))
 for (const btn of document.querySelectorAll<HTMLButtonElement>('#paint-toolbar .tool')) {
@@ -796,7 +818,7 @@ function fillAll() {
 }
 
 // pick = sample the color under the cursor, from the model OR a room surface
-const pickTargets = [...environment, ...paintableParts] // everything the eyedropper can hit
+let pickTargets: THREE.Mesh[] = [] // everything the eyedropper can hit (rebuilt per level)
 function pickColor(e: MouseEvent) {
   pointer.x = (e.clientX / window.innerWidth) * 2 - 1
   pointer.y = -(e.clientY / window.innerHeight) * 2 + 1
@@ -852,7 +874,6 @@ window.addEventListener('resize', () => {
 })
 
 // ----- Settings reused every frame -----
-const MOVE_SPEED = 6                  // horizontal units per second
 const FLOAT_SPEED = 4                 // vertical units per second (Space up / Shift down)
 const FLY_SPEED = 16                  // free-fly camera speed during the seek phase
 const freeCamPos = new THREE.Vector3() // the free-fly camera's position (seek phase)
@@ -953,15 +974,16 @@ function frame() {
         const len = Math.hypot(moveX, moveZ) // so diagonals aren't faster
         moveX /= len
         moveZ /= len
-        chameleon.position.x += moveX * MOVE_SPEED * delta
-        chameleon.position.z += moveZ * MOVE_SPEED * delta
+        chameleon.position.x += moveX * moveSpeed * delta
+        chameleon.position.z += moveZ * moveSpeed * delta
       }
 
-      // float up (Space) or sink down (Shift); it hovers when neither is held
+      // float up (Space) or sink down (Shift); it hovers when neither is held. The move-speed
+      // setting scales float too (proportionally), so it modifies all chameleon movement.
       let lift = 0
       if (keys[' ']) lift += 1
       if (keys['shift']) lift -= 1
-      chameleon.position.y += lift * FLOAT_SPEED * delta
+      chameleon.position.y += lift * FLOAT_SPEED * (moveSpeed / DEFAULT_MOVE_SPEED) * delta
     }
 
     // collision: keep the model's box inside the room on all three axes. We read the model's
@@ -977,6 +999,23 @@ function frame() {
     chameleon.position.x = Math.max(-(innerX - ex) - bodyCenter.x, Math.min(innerX - ex - bodyCenter.x, chameleon.position.x))
     chameleon.position.z = Math.max(-(innerZ - ez) - bodyCenter.z, Math.min(innerZ - ez - bodyCenter.z, chameleon.position.z))
     chameleon.position.y = Math.max(ey - bodyCenter.y, Math.min(ROOM.height - ey - bodyCenter.y, chameleon.position.y))
+
+    // push the body out of any obstacle it overlaps, along the shallowest axis (so it can't pass
+    // through and can rest against a face — or stand on top of a box). Treat the body as the same
+    // axis-aligned box (centre = position + bodyCenter, half-extents ex/ey/ez) used for the walls.
+    for (const o of obstacleBoxes) {
+      const dx = chameleon.position.x + bodyCenter.x - o.x
+      const dy = chameleon.position.y + bodyCenter.y - o.y
+      const dz = chameleon.position.z + bodyCenter.z - o.z
+      const px = ex + o.hx - Math.abs(dx)
+      const py = ey + o.hy - Math.abs(dy)
+      const pz = ez + o.hz - Math.abs(dz)
+      if (px > 0 && py > 0 && pz > 0) {            // overlapping on all three axes
+        if (px <= py && px <= pz) chameleon.position.x += dx < 0 ? -px : px
+        else if (py <= pz) chameleon.position.y += dy < 0 ? -py : py
+        else chameleon.position.z += dz < 0 ? -pz : pz
+      }
+    }
 
     // orbit the camera around the chameleon, staying inside the room
     lookTarget.copy(chameleon.position)
@@ -1014,5 +1053,121 @@ function frame() {
   renderer.render(scene, camera)
   requestAnimationFrame(frame)
 }
+
+// ----- Levels: turn a LevelDefinition into meshes, with 2-3 built-in rooms you can pick -----
+
+// free the current room's meshes before loading another, or Three.js leaks them every swap.
+// (The chameleon and seeker are NOT part of the level, so they're left alone.)
+function disposeLevel() {
+  for (const m of levelMeshes) {
+    scene.remove(m)
+    m.geometry.dispose()
+    const mat = m.material as THREE.MeshStandardMaterial
+    mat.map?.dispose()
+    mat.dispose()
+  }
+  levelMeshes.length = 0
+  environment.length = 0
+  obstacleBoxes.length = 0
+}
+
+// build a whole room from a definition: size, six surfaces, obstacles, palette, seeker start
+function loadLevel(def: LevelDefinition) {
+  disposeLevel()
+  ROOM.width = def.size.width
+  ROOM.depth = def.size.depth
+  ROOM.height = def.size.height
+  halfW = ROOM.width / 2
+  halfD = ROOM.depth / 2
+  const { width: W, depth: D, height: H } = def.size
+  buildBox(W, 0.2, D, 0, -0.1, 0, def.surfaces.floor)         // floor
+  buildBox(W, 0.2, D, 0, H + 0.1, 0, def.surfaces.ceiling)    // ceiling
+  buildBox(W, H, t, 0, H / 2, -halfD, def.surfaces.back)      // back wall (-z)
+  buildBox(W, H, t, 0, H / 2, halfD, def.surfaces.front)      // front wall (+z)
+  buildBox(t, H, D, -halfW, H / 2, 0, def.surfaces.left)      // left wall (-x)
+  buildBox(t, H, D, halfW, H / 2, 0, def.surfaces.right)      // right wall (+x)
+  for (const o of def.obstacles) {
+    buildBox(o.size[0], o.size[1], o.size[2], o.pos[0], o.pos[1], o.pos[2], o.surface)
+    obstacleBoxes.push({
+      x: o.pos[0], y: o.pos[1], z: o.pos[2],
+      hx: o.size[0] / 2, hy: o.size[1] / 2, hz: o.size[2] / 2,
+    })
+  }
+  seekerStart = def.seekerStart
+  buildSwatches(def.palette)
+  // the eyedropper + seeker raycast against these; refresh them now that the room changed
+  pickTargets = [...environment, ...paintableParts]
+  detectTargets = [...paintableParts, ...environment]
+}
+
+// the hand-made rooms
+const MAPS: Record<string, LevelDefinition> = {
+  pink: {
+    name: 'Amogus Room',
+    size: { width: 50, depth: 50, height: 30 },
+    surfaces: {
+      floor: { color: '#E8B0BE' }, ceiling: { color: '#FFE9EF' },
+      back: { image: amogusUrl }, front: { color: '#FFD9E1' },
+      left: { color: '#FFD9E1' }, right: { color: '#FFD9E1' },
+    },
+    palette: ['#FFD9E1', '#E8B0BE', '#FFE9EF', '#6abf69', '#ffffff', '#222222'],
+    obstacles: [],
+    seekerStart: [10, 6, -8],
+  },
+  crates: {
+    name: 'Crates',
+    size: { width: 50, depth: 50, height: 30 },
+    surfaces: {
+      floor: { color: '#6b6b76' }, ceiling: { color: '#4a4a55' },
+      back: { color: '#7a8a99' }, front: { color: '#7a8a99' },
+      left: { color: '#7a8a99' }, right: { color: '#7a8a99' },
+    },
+    palette: ['#7a8a99', '#6b6b76', '#8a6d4b', '#c2a36b', '#ffffff', '#222222'],
+    obstacles: [
+      { size: [8, 8, 8], pos: [-10, 4, -6], surface: { color: '#8a6d4b' } },
+      { size: [6, 12, 6], pos: [12, 6, 8], surface: { color: '#8a6d4b' } },
+      { size: [10, 5, 5], pos: [4, 2.5, -14], surface: { color: '#c2a36b' } },
+    ],
+    seekerStart: [0, 8, 14],
+  },
+  studio: {
+    name: 'Studio',
+    size: { width: 40, depth: 40, height: 24 },
+    surfaces: {
+      floor: { color: '#d9d2c5' }, ceiling: { color: '#f2efe9' },
+      back: { color: '#3a7ca5' }, front: { color: '#e4dccd' },
+      left: { color: '#e4dccd' }, right: { color: '#e4dccd' },
+    },
+    palette: ['#3a7ca5', '#e4dccd', '#d9d2c5', '#2f6b8f', '#ffffff', '#111111'],
+    obstacles: [
+      { size: [5, 14, 5], pos: [-8, 7, -8], surface: { color: '#e4dccd' } },
+      { size: [12, 4, 4], pos: [6, 2, 6], surface: { color: '#3a7ca5' } },
+    ],
+    seekerStart: [8, 6, 8],
+  },
+}
+const BuiltInMaps: LevelProvider = {
+  getLevel(id: string) { return Promise.resolve(MAPS[id]) }, // instant, but async to match M6
+}
+
+// map-select buttons on the main menu; picking one loads it (also as the menu backdrop)
+const mapListEl = document.getElementById('map-list') as HTMLDivElement
+let currentMapId = 'pink'
+function selectMap(id: string) {
+  currentMapId = id
+  for (const b of mapListEl.querySelectorAll<HTMLButtonElement>('.map-btn')) {
+    b.classList.toggle('selected', b.dataset.map === id)
+  }
+  BuiltInMaps.getLevel(id).then(loadLevel)
+}
+for (const id of Object.keys(MAPS)) {
+  const b = document.createElement('button')
+  b.className = 'map-btn'
+  b.dataset.map = id
+  b.textContent = MAPS[id].name
+  b.addEventListener('click', () => selectMap(id))
+  mapListEl.appendChild(b)
+}
+selectMap(currentMapId) // load the starting room (and show it behind the menu)
 
 frame() // start the loop

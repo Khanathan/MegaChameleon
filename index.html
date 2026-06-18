@@ -12,6 +12,7 @@
     <div id="menu" class="overlay hidden">
       <div class="panel">
         <h1>MegaChameleon</h1>
+        <div id="map-list"></div>
         <button id="btn-play">Play</button>
         <button id="btn-menu-settings">Settings</button>
       </div>
@@ -32,6 +33,9 @@
         <h1>Settings</h1>
         <label for="sens-input">Mouse sensitivity (0&ndash;10)</label>
         <input id="sens-input" type="number" min="0" max="10" step="0.1" value="1" />
+        <label for="speed-input">Move speed (1&ndash;20)</label>
+        <input id="speed-input" type="number" min="1" max="20" step="0.5" value="6" />
+        <p class="hint" id="speed-note">Default: 6</p>
         <div class="row">
           <button id="btn-settings-back">Back</button>
           <button id="btn-settings-apply">Apply</button>

@@ -38,20 +38,24 @@ any TypeScript error.
 
 ## Current state
 
-Milestones 1, 2, 3, and 4 are done (see the build order in `claudehelp/plan.md`). The whole game
-is in `src/main.ts` (one file for now); `index.html` holds the menu overlays and `src/style.css`
-the styling.
+Milestones 1, 2, 3, 4, and 5 are done (see the build order in `claudehelp/plan.md`). The whole
+game is in `src/main.ts` (one file for now); `index.html` holds the menu overlays and
+`src/style.css` the styling.
 
-- **Room:** an enclosed 50×50×30 box (floor, 4 walls, ceiling), pink-toned. The **back wall is
-  textured from `assets/amogus.jpeg`** (a first taste of M6) via `makeImageWall`.
+- **Rooms are data (M5):** a `LevelDefinition` (size, six surfaces, palette, obstacles, seeker
+  start) handed back by a `LevelProvider`; `loadLevel` turns it into meshes and `disposeLevel`
+  frees the old one on swap. `BuiltInMaps` ships 3 rooms (Amogus Room w/ the `amogus.jpeg` wall,
+  Crates, Studio), picked from the main menu. Obstacles are boxes that block the seeker's
+  line of sight and that the chameleon collides with (box push-out).
 - **Chameleon:** a blocky humanoid built from grouped boxes — a placeholder for a real model.
 - **Movement/camera:** camera-relative WASD, Space/Shift to float up/down, right-mouse to
   turn the model (yaw only), an orbit camera via pointer-lock mouse-look, scroll to zoom.
-  Full 3D collision keeps the body flush against walls/floor/ceiling (no gap, no clipping),
-  computed from the model's rotation matrix ("box shadow" on each axis).
+  Full 3D collision keeps the body flush against walls/floor/ceiling/obstacles (no gap, no
+  clipping), computed from the model's rotation matrix ("box shadow" on each axis).
 - **Round flow:** a `gameState` machine (`menu → hiding → seeking → result`) decides which
-  overlay shows and whether the sim runs. Main menu (Play, Settings), hide phase, a timed
-  seek with countdown (`SEEK_TIME`), and a result screen, plus a shared Settings (mouse sensitivity).
+  overlay shows and whether the sim runs. Main menu (Play, map picker, Settings), hide phase, a
+  timed seek with countdown (`SEEK_TIME`), and a result screen. Shared **Settings** = mouse
+  sensitivity + **move speed** (scales all chameleon movement incl. float; not the seek camera).
 - **Painting (M3):** press **Q** while hiding to enter a paint sub-mode (no new `gameState`).
   Each chameleon part has its own canvas-backed texture (faces unwrapped to a grid so paint
   doesn't bleed across them). Tools: pencil, brush, fill (whole model), pick (eyedrop from the
@@ -70,7 +74,7 @@ the styling.
   (WASD + Space/Shift + mouse look, clamped to the room) — you hid in the hide phase, now you
   watch. Hide phase keeps the orbit camera + move/paint.
 
-Still to come: `LevelProvider` + built-in maps (M5), image→room upload (M6), polish/deploy (M7).
+Still to come: image→room upload (M6), polish/deploy (M7).
 
 ## Decisions & gotchas to respect (don't "fix" these backwards)
 
@@ -109,12 +113,14 @@ Still to come: `LevelProvider` + built-in maps (M5), image→room upload (M6), p
 
 The one design rule that matters: **the game never cares how a room was made — it only asks
 for a finished room.** Everything talks to a `LevelProvider` that returns a `LevelDefinition`
-(room size, wall/floor textures, color palette, obstacle list, seeker start). Map-makers are
+(room size, surfaces, color palette, obstacle list, seeker start). Map-makers are
 interchangeable implementations behind that interface:
 
-- `BuiltInMaps` — 2–3 hand-made rooms (build first).
-- `ImagePaletteProvider` — version 1 of the upload feature: read the image's main colors,
-  texture the walls, place simple box obstacles. All in-browser, no AI.
+- `BuiltInMaps` — hand-made rooms. **Built (M5):** `loadLevel` consumes a `LevelDefinition`;
+  nothing downstream knows how the room was made.
+- `ImagePaletteProvider` — version 1 of the upload feature (M6): read the image's main colors,
+  texture the walls, place simple box obstacles. All in-browser, no AI. Implements the *same*
+  `LevelProvider`, so `loadLevel` and the rest are untouched.
 - A future depth- or Gaussian-splat-based provider can replace the image one as a drop-in,
   touching nothing else. (Note: despite the README, splatting is a *possible later* map-maker,
   not the current rendering primitive — the room is normal Three.js meshes.)
