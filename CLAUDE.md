@@ -38,15 +38,36 @@ any TypeScript error.
 
 ## Current state
 
-Milestones 1, 2, 3, 4, and 5 are done (see the build order in `claudehelp/plan.md`). The whole
-game is in `src/main.ts` (one file for now); `index.html` holds the menu overlays and
-`src/style.css` the styling.
+Milestones 1 through 6 are done (see the build order in `claudehelp/plan.md`). `index.html` holds
+the menu overlays and `src/style.css` the styling. The TypeScript is split into focused modules
+(no longer one file):
+
+- `main.ts` — entry: the game loop + startup wiring (which update runs in which phase).
+- `engine.ts` — renderer, scene, camera, lights, clock, resize.
+- `state.ts` — shared mutable state objects (`game`, `look`, `settings`, `keys`) used cross-module
+  via live bindings, plus look/input constants.
+- `levels.ts` — `LevelDefinition`/`LevelProvider` types, room state, `loadLevel`/`disposeLevel`,
+  `readHitColor`, the raycast target lists, and `BuiltInMaps` (3 rooms).
+- `imageLevel.ts` — the image-upload provider (M6): `imageToLevel(file)`.
+- `chameleon.ts` — the player model + its paintable canvas surfaces.
+- `seeker.ts` — the Among Us seeker: model, behavior, detection/suspicion, catch cutscene.
+- `painting.ts` — paint mode: tools, cursors, swatches, drawing, the eyedropper.
+- `controls.ts` — per-frame movement + cameras (hide orbit, seek free-fly).
+- `input.ts` — DOM event wiring (keyboard, mouse-look, wheel, fullscreen, Tab pause, hide keys).
+- `ui.ts` — screens + round-flow state machine, Settings, map picker (+ upload), HUD text.
+
+Dependency rule: modules import "downward" only (e.g. `input`/`ui` depend on `seeker`/`painting`,
+never the reverse) — no import cycles. Cross-module mutable state lives in `state.ts`/`levels.ts`
+as objects or `let` exports (ESM live bindings), so a reader always sees the current value.
 
 - **Rooms are data (M5):** a `LevelDefinition` (size, six surfaces, palette, obstacles, seeker
   start) handed back by a `LevelProvider`; `loadLevel` turns it into meshes and `disposeLevel`
   frees the old one on swap. `BuiltInMaps` ships 3 rooms (Amogus Room w/ the `amogus.jpeg` wall,
   Crates, Studio), picked from the main menu. Obstacles are boxes that block the seeker's
   line of sight and that the chameleon collides with (box push-out).
+- **Image upload (M6):** the "+ Upload" map option (`imageToLevel`) shrinks an uploaded image to
+  ≤512px, reads its palette, textures the walls with it, and scatters seeded obstacles — returning
+  the same `LevelDefinition`, so nothing downstream changes.
 - **Chameleon:** a blocky humanoid built from grouped boxes — a placeholder for a real model.
 - **Movement/camera:** camera-relative WASD, Space/Shift to float up/down, right-mouse to
   turn the model (yaw only), an orbit camera via pointer-lock mouse-look, scroll to zoom.
@@ -74,7 +95,7 @@ game is in `src/main.ts` (one file for now); `index.html` holds the menu overlay
   (WASD + Space/Shift + mouse look, clamped to the room) — you hid in the hide phase, now you
   watch. Hide phase keeps the orbit camera + move/paint.
 
-Still to come: image→room upload (M6), polish/deploy (M7).
+Still to come: polish + deploy (M7).
 
 ## Decisions & gotchas to respect (don't "fix" these backwards)
 
