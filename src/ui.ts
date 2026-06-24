@@ -11,6 +11,7 @@ import { buildSwatches } from './painting'
 import { imageToLevel } from './imageLevel'
 import { imageToSplatLevel, plyToSplatLevel } from './splatLevel'
 import { canExportSplat, exportSplatPly } from './splatRoom'
+import { errText } from './errors'
 
 // ----- DOM -----
 const screens = {
@@ -134,7 +135,7 @@ function setActiveMap(key: string) { // highlight the active button (a built-in 
 }
 export function selectMap(id: string) {
   setActiveMap(id)
-  BuiltInMaps.getLevel(id).then(applyLevel)
+  BuiltInMaps.getLevel(id).then(applyLevel).catch((err) => showLoadError(`Couldn't load "${id}"`, err))
 }
 for (const id of Object.keys(MAPS)) {
   const b = document.createElement('button')
@@ -167,6 +168,16 @@ function addPicker(key: string, label: string, accept: string, onFile: (file: Fi
   })
 }
 
+// Show a failed load to the player (in the overlay, auto-dismissed) and log the full error — with
+// its `cause` chain — to the console for debugging. `prefix` says which flow failed; the stage that
+// actually broke is already baked into the error message by the `step`/labels upstream.
+function showLoadError(prefix: string, err: unknown) {
+  console.error(`${prefix}:`, err) // full object incl. cause/stack for the dev console
+  loadingEl.classList.remove('hidden')
+  loadingText.textContent = `${prefix}: ${errText(err)}`
+  setTimeout(() => loadingEl.classList.add('hidden'), 6000)
+}
+
 // Run a slow level load behind the loading overlay: blocks Play + map swaps (busy), streams
 // progress, and shows a message on failure. `produce` builds the LevelDefinition (it may report
 // progress through the passed callback). Never rejects — failures are surfaced in the overlay.
@@ -184,25 +195,29 @@ async function runLevelLoad(
     await applyLevel(def)
     loadingEl.classList.add('hidden')
   } catch (err) {
-    loadingText.textContent = `${failMsg}: ${err instanceof Error ? err.message : err}`
-    setTimeout(() => loadingEl.classList.add('hidden'), 4000)
+    showLoadError(failMsg, err)
   } finally {
     busy = false
   }
 }
 
-// upload an image -> a flat textured room (M6). Fast (shrinks to <=512px), so no loading overlay.
+// upload an image -> a flat textured room (M6). Fast (shrinks to <=512px), so no loading overlay —
+// only the error overlay if it fails.
 addPicker('upload', '+ Upload', 'image/*', async (file) => {
   if (!file.type.startsWith('image/')) return
   setActiveMap('upload')
-  applyLevel(await imageToLevel(file))
+  try {
+    await applyLevel(await imageToLevel(file))
+  } catch (err) {
+    showLoadError('Building the room failed', err)
+  }
 })
 
 // upload an image -> a Gaussian-splat room (M7): network (hallucinate a 360 room + estimate depth),
 // then lift + bake during loadLevel. Slow, so it runs behind the overlay with Play disabled.
 addPicker('splat', '+ 3D Splat', 'image/*', (file) => {
   if (!file.type.startsWith('image/')) return
-  runLevelLoad('splat', (onProgress) => imageToSplatLevel(file, onProgress), "Couldn't build the splat room")
+  runLevelLoad('splat', (onProgress) => imageToSplatLevel(file, onProgress), 'Splat generation failed')
 })
 
 // import a ready-made .ply splat -> a room directly (no network). loadLevel fetches + parses the
@@ -210,7 +225,7 @@ addPicker('splat', '+ 3D Splat', 'image/*', (file) => {
 addPicker('import', '+ Import Splat', '.ply', (file) => {
   if (!file.name.toLowerCase().endsWith('.ply')) return
   const def = plyToSplatLevel(file)
-  runLevelLoad('import', async (onProgress) => { onProgress('Reading splat file…'); return def }, "Couldn't load that splat")
+  runLevelLoad('import', async (onProgress) => { onProgress('Reading splat file…'); return def }, 'Splat import failed')
     .finally(() => URL.revokeObjectURL(def.splatUrl!))
 })
 

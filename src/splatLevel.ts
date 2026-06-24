@@ -5,31 +5,56 @@
 // the network orchestration and returns the same LevelDefinition shape as every other provider.
 import type { LevelDefinition } from './levels'
 import { shrinkToCanvas, readPalette } from './imageLevel'
+import { step } from './errors'
 
 type Progress = (msg: string) => void
 
-// POST a JSON body to one of our /api routes and return the parsed JSON.
+// POST a JSON body to one of our /api routes and return the parsed JSON. Three failure modes, each
+// with its own clear message: the request never reaches the server, the server replies with an
+// error (we surface the { error } our routes send), or the reply isn't JSON.
 async function api<T>(path: string, body: unknown): Promise<T> {
-  const res = await fetch(path, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-  })
-  if (!res.ok) throw new Error(`${path} failed (${res.status}): ${await res.text()}`)
-  return res.json() as Promise<T>
+  let res: Response
+  try {
+    res = await fetch(path, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    })
+  } catch (err) {
+    throw new Error(`couldn't reach ${path} (network error — is the API running?)`, { cause: err })
+  }
+  if (!res.ok) {
+    const raw = await res.text()
+    let detail = raw
+    try { detail = JSON.parse(raw).error ?? raw } catch { /* not JSON — keep the raw text */ }
+    throw new Error(`${path} failed (${res.status}): ${detail || res.statusText}`)
+  }
+  try {
+    return (await res.json()) as T
+  } catch (err) {
+    throw new Error(`${path} returned a response that wasn't JSON`, { cause: err })
+  }
 }
 
 export async function imageToSplatLevel(file: File, onProgress: Progress): Promise<LevelDefinition> {
   onProgress('Reading image…')
-  const canvas = await shrinkToCanvas(file, 1024) // a bit bigger than M6: better panorama input
-  const palette = readPalette(canvas)             // paint-toolbar colors only (no obstacles here)
-  const imageUrl = canvas.toDataURL('image/jpeg', 0.9) // sent to the proxy; fal accepts data URIs
+  const { imageUrl, palette } = await step('Reading the image', async () => {
+    const canvas = await shrinkToCanvas(file, 1024) // a bit bigger than M6: better panorama input
+    return {
+      imageUrl: canvas.toDataURL('image/jpeg', 0.9), // sent to the proxy; fal accepts data URIs
+      palette: readPalette(canvas),                  // paint-toolbar colors only (no obstacles here)
+    }
+  })
 
   onProgress('Hallucinating the room (360°)… this can take ~30–90s')
-  const { panoUrl } = await api<{ panoUrl: string }>('/api/pano', { imageUrl })
+  const { panoUrl } = await step('Generating the 360° panorama', () =>
+    api<{ panoUrl: string }>('/api/pano', { imageUrl }))
+  if (!panoUrl) throw new Error('Generating the 360° panorama: the service returned no image.')
 
   onProgress('Estimating depth…')
-  const { depthUrl } = await api<{ depthUrl: string }>('/api/depth', { panoUrl })
+  const { depthUrl } = await step('Estimating depth', () =>
+    api<{ depthUrl: string }>('/api/depth', { panoUrl }))
+  if (!depthUrl) throw new Error('Estimating depth: the service returned no image.')
 
   onProgress('Lifting to a 3D splat…')
   return {

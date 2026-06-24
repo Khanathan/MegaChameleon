@@ -149,7 +149,14 @@ export async function loadLevel(def: LevelDefinition) {
     if (gen !== loadGen) disposeSplatRoom() // superseded by a newer load — drop this splat
   } else if (def.splatUrl) {
     // a ready-made splat file (the "import" path): fetch its bytes and build directly from them.
-    const buffer = await fetch(def.splatUrl).then((r) => r.arrayBuffer())
+    let buffer: ArrayBuffer
+    try {
+      const r = await fetch(def.splatUrl)
+      if (!r.ok) throw new Error(`fetch returned ${r.status}`)
+      buffer = await r.arrayBuffer()
+    } catch (err) {
+      throw new Error(`Reading the splat file: ${err instanceof Error ? err.message : String(err)}`, { cause: err })
+    }
     if (gen !== loadGen) return // superseded while downloading — don't bother building
     await buildSplatRoomFromPly(buffer, def.size, def.splatTransform)
     if (gen !== loadGen) disposeSplatRoom()

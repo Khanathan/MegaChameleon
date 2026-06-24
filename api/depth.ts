@@ -21,16 +21,38 @@ const DEPTH_MODEL = process.env.FAL_DEPTH_MODEL || 'fal-ai/image-preprocessors/d
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (req.method !== 'POST') return res.status(405).send('POST only')
+  if (!process.env.FAL_KEY) {
+    return res.status(500).json({ error: 'Server is missing the FAL_KEY environment variable.' })
+  }
+
+  let panoUrl: string | undefined
   try {
     const body = typeof req.body === 'string' ? JSON.parse(req.body || '{}') : req.body ?? {}
-    const panoUrl = body.panoUrl as string | undefined
-    if (!panoUrl) return res.status(400).json({ error: 'panoUrl required' })
-
-    const result: any = await fal.subscribe(DEPTH_MODEL, { input: { image_url: panoUrl } })
-    const depthUrl = result?.data?.image?.url
-    if (!depthUrl) return res.status(502).json({ error: 'no depth map in response', raw: result })
-    return res.json({ depthUrl })
-  } catch (err) {
-    return res.status(500).json({ error: err instanceof Error ? err.message : String(err) })
+    panoUrl = body.panoUrl
+  } catch {
+    return res.status(400).json({ error: 'Request body is not valid JSON.' })
   }
+  if (!panoUrl) return res.status(400).json({ error: 'Missing "panoUrl" in the request body.' })
+
+  let result: any
+  try {
+    result = await fal.subscribe(DEPTH_MODEL, { input: { image_url: panoUrl } })
+  } catch (err) {
+    return res.status(502).json({ error: `Depth estimation (${DEPTH_MODEL}) failed: ${falError(err)}` })
+  }
+  const depthUrl = result?.data?.image?.url
+  if (!depthUrl) {
+    return res.status(502).json({ error: 'Depth service returned no image URL.', raw: result })
+  }
+  return res.json({ depthUrl })
+}
+
+// Pull a readable message out of a fal client error: prefer the API's own validation detail, then
+// the error message, then a stringified fallback.
+function falError(err: unknown): string {
+  const e = err as any
+  const detail = e?.body?.detail ?? e?.body?.message
+  if (detail) return typeof detail === 'string' ? detail : JSON.stringify(detail)
+  if (e?.message) return String(e.message)
+  return String(err)
 }

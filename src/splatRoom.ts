@@ -5,6 +5,7 @@
 // import cycle — callers in levels/seeker/controls/painting import THIS, downward.
 import * as THREE from 'three'
 import { scene, renderer, camera } from './engine'
+import { errText } from './errors'
 
 // ----- the gaussians, as plain arrays we own -----
 // We build these ourselves in the DIY lift, so the color/occupancy bake reads them directly and
@@ -62,7 +63,12 @@ export async function buildSplatRoomFromPly(
 ) {
   roomSize = size
   grid = GRID
-  const data = parsePly(buffer)
+  let data: SplatData
+  try {
+    data = parsePly(buffer)
+  } catch (err) {
+    throw new Error(`Reading the .ply file: ${errText(err)}`, { cause: err })
+  }
   await bakeAndRender(data, size, transform)
 }
 
@@ -153,7 +159,10 @@ export function exportSplatPly(): Blob | null {
 const STRIDE = 3 // sample every Nth pixel each axis (1920x960 / 3 ~= 200k points)
 
 async function liftPanoramaToPoints(panoUrl: string, depthUrl: string): Promise<SplatData> {
-  const [pano, depth] = await Promise.all([loadPixels(panoUrl), loadPixels(depthUrl)])
+  const [pano, depth] = await Promise.all([
+    loadPixels(panoUrl, 'panorama'),
+    loadPixels(depthUrl, 'depth map'),
+  ])
   const W = pano.width, H = pano.height
   const positions: number[] = []
   const colors: number[] = []
@@ -173,7 +182,9 @@ async function liftPanoramaToPoints(panoUrl: string, depthUrl: string): Promise<
       colors.push(pano.data[i], pano.data[i + 1], pano.data[i + 2])
     }
   }
-  return { positions: new Float32Array(positions), colors: new Uint8Array(colors), count: colors.length / 3 }
+  const count = colors.length / 3
+  if (!count) throw new Error('the lift produced no 3D points (the panorama or depth map was empty)')
+  return { positions: new Float32Array(positions), colors: new Uint8Array(colors), count }
 }
 
 // ===== parse an imported .ply into the same colored point cloud the lift produces =====
@@ -283,22 +294,29 @@ function parsePly(buffer: ArrayBuffer): SplatData {
   return { positions, colors, count: out }
 }
 
-// draw an image url onto a canvas and read its pixels (we need the raw RGBA on the CPU).
-// goes through our own origin if a direct fetch would be CORS-blocked — see /api/file note.
-async function loadPixels(url: string): Promise<ImageData> {
+// draw an image url onto a canvas and read its pixels (we need the raw RGBA on the CPU). `label`
+// names which image this is (panorama / depth map) so a failure says exactly what didn't load.
+async function loadPixels(url: string, label: string): Promise<ImageData> {
   const img = await new Promise<HTMLImageElement>((res, rej) => {
     const i = new Image()
     i.crossOrigin = 'anonymous'
     i.onload = () => res(i)
-    i.onerror = () => rej(new Error('could not load ' + url))
+    i.onerror = () => rej(new Error(`couldn't load the ${label} image (it may have failed to generate, or be blocked by CORS)`))
     i.src = url
   })
+  if (!img.width || !img.height) throw new Error(`the ${label} image is empty (0×0)`)
   const c = document.createElement('canvas')
   c.width = img.width
   c.height = img.height
-  const cx = c.getContext('2d')!
+  const cx = c.getContext('2d')
+  if (!cx) throw new Error('the browser gave no 2D canvas context to read image pixels')
   cx.drawImage(img, 0, 0)
-  return cx.getImageData(0, 0, c.width, c.height)
+  try {
+    return cx.getImageData(0, 0, c.width, c.height)
+  } catch (err) {
+    // getImageData throws if the canvas is "tainted" by a cross-origin image without CORS headers.
+    throw new Error(`couldn't read the ${label} pixels (the image's server is missing CORS headers)`, { cause: err })
+  }
 }
 
 // the depth map may be a different size than the panorama; sample it by fraction (u,v in 0..1)
@@ -421,23 +439,32 @@ export function resolveSplatCollision(
 // own positions+colors. Verify the SplatBuffer/DropInViewer calls against the installed version
 // when you first run this — the surrounding bake/collision/color logic does NOT depend on it.
 async function renderPoints(data: SplatData, SCALE: number) {
-  const GS: any = await import('@mkkellogg/gaussian-splats-3d')
-  // Build an uncompressed splat array: per point a position, a tiny isotropic scale, identity
-  // rotation, full opacity, and the lifted color.
-  const splatArray = new GS.UncompressedSplatArray()
-  const p = data.positions, c = data.colors
-  for (let i = 0; i < data.count; i++) {
-    splatArray.addSplat(
-      p[i * 3], p[i * 3 + 1], p[i * 3 + 2],
-      SCALE, SCALE, SCALE,
-      1, 0, 0, 0,                           // identity quaternion (w,x,y,z)
-      c[i * 3], c[i * 3 + 1], c[i * 3 + 2], 255,
-    )
+  let GS: any
+  try {
+    GS = await import('@mkkellogg/gaussian-splats-3d')
+  } catch (err) {
+    throw new Error('Rendering the splat: could not load the renderer (@mkkellogg/gaussian-splats-3d)', { cause: err })
   }
-  const buffer = GS.SplatBufferGenerator.getStandardGenerator(0.5, 1)
-    .generateFromUncompressedSplatArray(splatArray)
-  const dropIn = new GS.DropInViewer({ renderer, camera, gpuAcceleratedSort: true })
-  await dropIn.addSplatBuffers([buffer], [{ showLoadingUI: false }])
-  scene.add(dropIn)
-  viewer = { object: dropIn, dispose: () => dropIn.dispose?.(), update: () => dropIn.update?.() }
+  try {
+    // Build an uncompressed splat array: per point a position, a tiny isotropic scale, identity
+    // rotation, full opacity, and the lifted color.
+    const splatArray = new GS.UncompressedSplatArray()
+    const p = data.positions, c = data.colors
+    for (let i = 0; i < data.count; i++) {
+      splatArray.addSplat(
+        p[i * 3], p[i * 3 + 1], p[i * 3 + 2],
+        SCALE, SCALE, SCALE,
+        1, 0, 0, 0,                           // identity quaternion (w,x,y,z)
+        c[i * 3], c[i * 3 + 1], c[i * 3 + 2], 255,
+      )
+    }
+    const buffer = GS.SplatBufferGenerator.getStandardGenerator(0.5, 1)
+      .generateFromUncompressedSplatArray(splatArray)
+    const dropIn = new GS.DropInViewer({ renderer, camera, gpuAcceleratedSort: true })
+    await dropIn.addSplatBuffers([buffer], [{ showLoadingUI: false }])
+    scene.add(dropIn)
+    viewer = { object: dropIn, dispose: () => dropIn.dispose?.(), update: () => dropIn.update?.() }
+  } catch (err) {
+    throw new Error(`Rendering the splat: the renderer failed on ${data.count} points`, { cause: err })
+  }
 }

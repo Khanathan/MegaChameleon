@@ -12,21 +12,46 @@ fal.config({ credentials: process.env.FAL_KEY })
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (req.method !== 'POST') return res.status(405).send('POST only')
-  try {
-    // the Node runtime parses a JSON body into req.body; tolerate a raw string just in case.
-    const body = typeof req.body === 'string' ? JSON.parse(req.body || '{}') : req.body ?? {}
-    const imageUrl = body.imageUrl as string | undefined
-    if (!imageUrl) return res.status(400).json({ error: 'imageUrl required' })
+  if (!process.env.FAL_KEY) {
+    return res.status(500).json({ error: 'Server is missing the FAL_KEY environment variable.' })
+  }
 
-    const result: any = await fal.subscribe('fal-ai/hunyuan_world', {
+  // the Node runtime parses a JSON body into req.body; tolerate a raw string just in case.
+  let imageUrl: string | undefined
+  try {
+    const body = typeof req.body === 'string' ? JSON.parse(req.body || '{}') : req.body ?? {}
+    imageUrl = body.imageUrl
+  } catch {
+    return res.status(400).json({ error: 'Request body is not valid JSON.' })
+  }
+  if (!imageUrl) return res.status(400).json({ error: 'Missing "imageUrl" in the request body.' })
+
+  // The actual fal call — its own failure (bad key, unknown model, fal outage, timeout) is the most
+  // likely thing to break, so label it clearly and pass fal's own detail through when present.
+  let result: any
+  try {
+    result = await fal.subscribe('fal-ai/hunyuan_world', {
       input: { image_url: imageUrl, prompt: 'interior room, same style and lighting, full 360 view' },
     })
-    // Verified against fal.ai/models/fal-ai/hunyuan_world: output is a single `image` object, so
-    // through the fal client wrapper the panorama URL is result.data.image.url (a 1920x960 PNG).
-    const panoUrl = result?.data?.image?.url
-    if (!panoUrl) return res.status(502).json({ error: 'no panorama in response', raw: result })
-    return res.json({ panoUrl })
   } catch (err) {
-    return res.status(500).json({ error: err instanceof Error ? err.message : String(err) })
+    return res.status(502).json({ error: `Panorama generation (fal Hunyuan World) failed: ${falError(err)}` })
   }
+
+  // Verified against fal.ai/models/fal-ai/hunyuan_world: output is a single `image` object, so
+  // through the fal client wrapper the panorama URL is result.data.image.url (a 1920x960 PNG).
+  const panoUrl = result?.data?.image?.url
+  if (!panoUrl) {
+    return res.status(502).json({ error: 'Panorama service returned no image URL.', raw: result })
+  }
+  return res.json({ panoUrl })
+}
+
+// Pull a readable message out of a fal client error: prefer the API's own validation detail, then
+// the error message, then a stringified fallback.
+function falError(err: unknown): string {
+  const e = err as any
+  const detail = e?.body?.detail ?? e?.body?.message
+  if (detail) return typeof detail === 'string' ? detail : JSON.stringify(detail)
+  if (e?.message) return String(e.message)
+  return String(err)
 }
