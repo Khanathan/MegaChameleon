@@ -5,15 +5,19 @@
 // This is a Vite project, so the function runs on Vercel's Node runtime: the handler is called as
 // (req, res) and MUST end by sending through `res` — returning a Response (the web/edge style) just
 // hangs the request. Setup: `vercel env add FAL_KEY` (FAL_KEY is fal.ai's standard variable name).
-/// <reference types="node" />
 import type { VercelRequest, VercelResponse } from '@vercel/node'
 import { fal } from '@fal-ai/client'
 
-fal.config({ credentials: process.env.FAL_KEY })
+// Read env via globalThis (typed by the standard lib) instead of the bare `process` global, which
+// needs Node types — Vercel type-checks /api against the browser tsconfig, so `process` isn't in
+// scope there. globalThis.process exists at runtime on Node.
+const env = (globalThis as { process?: { env: Record<string, string | undefined> } }).process?.env ?? {}
+
+fal.config({ credentials: env.FAL_KEY })
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (req.method !== 'POST') return res.status(405).send('POST only')
-  if (!process.env.FAL_KEY) {
+  if (!env.FAL_KEY) {
     return res.status(500).json({ error: 'Server is missing the FAL_KEY environment variable.' })
   }
 
