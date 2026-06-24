@@ -233,7 +233,11 @@ async function liftPanoramaToPoints(panoUrl: string, depthUrl: string): Promise<
   // world, so a gaussian sized to that covers its patch — small near, larger far — and the wall never
   // looks "gridded". SIZE_K sets the overlap (std as a fraction of the gap).
   const angStep = STRIDE * (Math.PI / H)
-  const SIZE_K = 0.7
+  const SIZE_K = 0.5
+  // Monocular depth bows the walls into a smooth sphere (no corners). So project mostly onto the room
+  // BOX (flat walls/floor/ceiling with real corners = a rectangular room) and let depth bend each
+  // surface inward only a little, for relief. 0 = flat box, 1 = full depth-globe.
+  const RELIEF = 0.2
   for (let py = 0; py < H; py += STRIDE) {
     // latitude: top row (+pi/2) down to bottom row (-pi/2)
     const lat = (0.5 - py / H) * Math.PI
@@ -255,7 +259,8 @@ async function liftPanoramaToPoints(panoUrl: string, depthUrl: string): Promise<
       // the ceiling/floor/walls flat (no pole cone); depth can still pull a surface NEARER than the
       // box (furniture you hide behind), it just can't push one past the wall.
       const boxDist = Math.min(hx / (Math.abs(dirx) + 1e-6), hy / (Math.abs(diry) + 1e-6), hz / (Math.abs(dirz) + 1e-6))
-      const dist = Math.min(depthDist, boxDist)
+      // sit on the box, pulled inward by a fraction of however much nearer the depth says (relief).
+      const dist = boxDist - (boxDist - Math.min(depthDist, boxDist)) * RELIEF
       positions.push(dirx * dist, diry * dist, dirz * dist)
       colors.push(pano.data[i], pano.data[i + 1], pano.data[i + 2])
       sizes.push(dist * angStep * SIZE_K) // gaussian grows with distance to keep coverage even
