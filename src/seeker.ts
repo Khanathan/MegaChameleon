@@ -5,6 +5,7 @@ import * as THREE from 'three'
 import { scene } from './engine'
 import { chameleon, paintableParts } from './chameleon'
 import { environment, detectTargets, seekerStart, readHitColor } from './levels'
+import { isSplatRoom, readSplatColor } from './splatRoom'
 
 // ----- The model (built from primitives; +z is its front/visor side) -----
 function makeSeeker() {
@@ -205,10 +206,23 @@ function updateSuspicion(dt: number) {
     const first = hits[0]
     if (first && paintableParts.includes(first.object as THREE.Mesh)) { // clear line of sight to body
       hitNormal(first, _n); litColor(readHitColor(first), _n, _litA)    // the body's lit color
-      const behind = hits.find((h) => environment.includes(h.object as THREE.Mesh))
-      if (behind) {
-        hitNormal(behind, _n); litColor(readHitColor(behind), _n, _litB) // the wall behind it
-        standOut = Math.min(1, colorDist(_litA, _litB) / STAND_OUT_MAX)
+      if (isSplatRoom()) {
+        // no wall to hit — sample the splat's baked color behind the body, along the view ray.
+        // null means open space behind it (nothing to blend with) -> fully stands out.
+        const back = readSplatColor(first.point, _toCham)
+        if (back === null) {
+          standOut = 1
+        } else {
+          _n.copy(_toCham).negate() // backdrop faces the seeker
+          litColor(back, _n, _litB)
+          standOut = Math.min(1, colorDist(_litA, _litB) / STAND_OUT_MAX)
+        }
+      } else {
+        const behind = hits.find((h) => environment.includes(h.object as THREE.Mesh))
+        if (behind) {
+          hitNormal(behind, _n); litColor(readHitColor(behind), _n, _litB) // the wall behind it
+          standOut = Math.min(1, colorDist(_litA, _litB) / STAND_OUT_MAX)
+        }
       }
     }
   }

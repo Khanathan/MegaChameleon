@@ -4,6 +4,7 @@ import * as THREE from 'three'
 import { camera } from './engine'
 import { chameleon, BODY_HX, BODY_HY, BODY_HZ } from './chameleon'
 import { ROOM, halfW, halfD, t, obstacleBoxes } from './levels'
+import { isSplatRoom, resolveSplatCollision } from './splatRoom'
 import { game, look, settings, keys, DEFAULT_MOVE_SPEED } from './state'
 
 const FLOAT_SPEED = 4                 // vertical units per second (Space up / Shift down)
@@ -86,6 +87,18 @@ export function updateHidePhase(delta: number) {
       else if (py <= pz) chameleon.position.y += dy < 0 ? -py : py
       else chameleon.position.z += dz < 0 ? -pz : pz
     }
+  }
+
+  // splat rooms have no obstacle boxes; push the body out of solid splat voxels instead (the box
+  // walls above are still the hard outer boundary behind this).
+  if (isSplatRoom()) {
+    const r = resolveSplatCollision(
+      chameleon.position.x + bodyCenter.x, chameleon.position.y + bodyCenter.y, chameleon.position.z + bodyCenter.z,
+      ex, ey, ez,
+    )
+    chameleon.position.x += r.dx
+    chameleon.position.y += r.dy
+    chameleon.position.z += r.dz
   }
 
   // orbit the camera around the chameleon, staying inside the room

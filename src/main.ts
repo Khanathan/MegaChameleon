@@ -6,6 +6,7 @@ import { renderer, scene, camera, clock } from './engine'
 import { game } from './state'
 import { updateHidePhase, updateSeekPhase } from './controls'
 import { updateSeeker, tickDetection, updateCaught, caught } from './seeker'
+import { updateSplatRoom } from './splatRoom'
 import { setState, finishSeek, selectMap, updateHud, SEEK_TIME, SEEK_GRACE } from './ui'
 import './input' // side-effect: install the input event handlers
 
@@ -15,6 +16,7 @@ function frame() {
   // run the simulation only while playing and not paused; otherwise freeze and just draw
   const playing = game.state === 'hiding' || game.state === 'seeking'
   if (!playing || game.paused) {
+    updateSplatRoom() // keep the splat sorted for the current view even while frozen
     renderer.render(scene, camera)
     requestAnimationFrame(frame)
     return
@@ -42,6 +44,7 @@ function frame() {
   }
 
   updateHud(delta)
+  updateSplatRoom() // re-sort the splat's gaussians for the camera's new view
   renderer.render(scene, camera)
   requestAnimationFrame(frame)
 }

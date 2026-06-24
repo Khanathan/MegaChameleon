@@ -5,7 +5,7 @@ import type { LevelDefinition, Surface, Obstacle } from './levels'
 
 // draw the upload onto a small canvas (long side <= max). That one canvas is read for colors AND
 // becomes the wall texture. An opaque backdrop keeps transparent PNGs from going black.
-async function shrinkToCanvas(file: File, max = 512): Promise<HTMLCanvasElement> {
+export async function shrinkToCanvas(file: File, max = 512): Promise<HTMLCanvasElement> {
   const url = URL.createObjectURL(file)
   const img = await new Promise<HTMLImageElement>((res, rej) => {
     const i = new Image()
@@ -26,7 +26,7 @@ async function shrinkToCanvas(file: File, max = 512): Promise<HTMLCanvasElement>
 }
 
 // pull the main colors out: bucket each pixel's RGB to ~4 bits/channel, take the most common bins
-function readPalette(c: HTMLCanvasElement, count = 6): string[] {
+export function readPalette(c: HTMLCanvasElement, count = 6): string[] {
   const { data } = c.getContext('2d')!.getImageData(0, 0, c.width, c.height)
   const bins = new Map<number, number>()
   for (let i = 0; i < data.length; i += 16) { // stride for speed

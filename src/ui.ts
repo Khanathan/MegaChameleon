@@ -9,6 +9,8 @@ import type { LevelDefinition } from './levels'
 import { spawnSeeker, seeker, suspicionBar } from './seeker'
 import { buildSwatches } from './painting'
 import { imageToLevel } from './imageLevel'
+import { imageToSplatLevel, plyToSplatLevel } from './splatLevel'
+import { canExportSplat, exportSplatPly } from './splatRoom'
 
 // ----- DOM -----
 const screens = {
@@ -17,6 +19,9 @@ const screens = {
   settings: document.getElementById('settings') as HTMLDivElement,
   result: document.getElementById('result') as HTMLDivElement,
 }
+const loadingEl = document.getElementById('loading') as HTMLDivElement
+const loadingText = document.getElementById('loading-text') as HTMLParagraphElement
+let busy = false // true while a splat room is generating; blocks Play + map swaps
 const confirmEl = document.getElementById('confirm') as HTMLDivElement
 const howtoEl = document.getElementById('howto') as HTMLDivElement // top-right how-to-play card
 const resultTitle = document.getElementById('result-title') as HTMLHeadingElement
@@ -98,7 +103,7 @@ export function showConfirm(visible: boolean) {
 }
 
 // ----- Menu + settings buttons -----
-document.getElementById('btn-play')!.addEventListener('click', () => startRound())
+document.getElementById('btn-play')!.addEventListener('click', () => { if (!busy) startRound() })
 document.getElementById('btn-menu-settings')!.addEventListener('click', () => openSettings('menu'))
 document.getElementById('btn-pause-settings')!.addEventListener('click', () => openSettings('pause'))
 document.getElementById('btn-result-menu')!.addEventListener('click', () => setState('menu'))
@@ -117,9 +122,10 @@ document.getElementById('btn-settings-apply')!.addEventListener('click', () => {
 })
 
 // ----- Map picker (built-ins + image upload) -----
-function applyLevel(def: LevelDefinition) {
-  loadLevel(def)
+async function applyLevel(def: LevelDefinition) {
+  await loadLevel(def) // async: a splat room builds (network + lift) before this resolves
   buildSwatches(def.palette) // palette swatches are a painting concern, applied here after load
+  refreshDownloadButton() // show "Download splat" only when the loaded room is a splat
 }
 function setActiveMap(key: string) { // highlight the active button (a built-in id or 'upload')
   for (const b of mapListEl.querySelectorAll<HTMLButtonElement>('.map-btn')) {
@@ -139,25 +145,91 @@ for (const id of Object.keys(MAPS)) {
   mapListEl.appendChild(b)
 }
 
-// upload-an-image option: a button that opens a hidden file picker; the image becomes a room via
-// imageToLevel, then loadLevel — the same path the built-ins use
-const uploadInput = document.createElement('input')
-uploadInput.type = 'file'
-uploadInput.accept = 'image/*'
-uploadInput.style.display = 'none'
-document.body.appendChild(uploadInput)
-const uploadBtn = document.createElement('button')
-uploadBtn.className = 'map-btn'
-uploadBtn.dataset.map = 'upload'
-uploadBtn.textContent = '+ Upload'
-uploadBtn.addEventListener('click', () => uploadInput.click())
-mapListEl.appendChild(uploadBtn)
-uploadInput.addEventListener('change', async () => {
-  const file = uploadInput.files?.[0]
-  uploadInput.value = '' // let the same file be picked again
-  if (!file || !file.type.startsWith('image/')) return
+// File-picker map options ("+ Upload", "+ 3D Splat", "+ Import Splat"): each is a menu button
+// backed by a hidden file input. addPicker wires the button + input and runs `onFile` with the
+// chosen file. Picking is blocked while a slow load is already running (busy).
+function addPicker(key: string, label: string, accept: string, onFile: (file: File) => void) {
+  const input = document.createElement('input')
+  input.type = 'file'
+  input.accept = accept
+  input.style.display = 'none'
+  document.body.appendChild(input)
+  const btn = document.createElement('button')
+  btn.className = 'map-btn'
+  btn.dataset.map = key
+  btn.textContent = label
+  btn.addEventListener('click', () => { if (!busy) input.click() })
+  mapListEl.appendChild(btn)
+  input.addEventListener('change', () => {
+    const file = input.files?.[0]
+    input.value = '' // let the same file be picked again
+    if (file) onFile(file)
+  })
+}
+
+// Run a slow level load behind the loading overlay: blocks Play + map swaps (busy), streams
+// progress, and shows a message on failure. `produce` builds the LevelDefinition (it may report
+// progress through the passed callback). Never rejects — failures are surfaced in the overlay.
+async function runLevelLoad(
+  key: string,
+  produce: (onProgress: (msg: string) => void) => Promise<LevelDefinition>,
+  failMsg: string,
+) {
+  setActiveMap(key)
+  busy = true
+  loadingEl.classList.remove('hidden')
+  loadingText.textContent = 'Loading…'
+  try {
+    const def = await produce((msg) => { loadingText.textContent = msg })
+    await applyLevel(def)
+    loadingEl.classList.add('hidden')
+  } catch (err) {
+    loadingText.textContent = `${failMsg}: ${err instanceof Error ? err.message : err}`
+    setTimeout(() => loadingEl.classList.add('hidden'), 4000)
+  } finally {
+    busy = false
+  }
+}
+
+// upload an image -> a flat textured room (M6). Fast (shrinks to <=512px), so no loading overlay.
+addPicker('upload', '+ Upload', 'image/*', async (file) => {
+  if (!file.type.startsWith('image/')) return
   setActiveMap('upload')
   applyLevel(await imageToLevel(file))
+})
+
+// upload an image -> a Gaussian-splat room (M7): network (hallucinate a 360 room + estimate depth),
+// then lift + bake during loadLevel. Slow, so it runs behind the overlay with Play disabled.
+addPicker('splat', '+ 3D Splat', 'image/*', (file) => {
+  if (!file.type.startsWith('image/')) return
+  runLevelLoad('splat', (onProgress) => imageToSplatLevel(file, onProgress), "Couldn't build the splat room")
+})
+
+// import a ready-made .ply splat -> a room directly (no network). loadLevel fetches + parses the
+// file's bytes (via splatUrl); we revoke the temporary blob URL once that load is done with it.
+addPicker('import', '+ Import Splat', '.ply', (file) => {
+  if (!file.name.toLowerCase().endsWith('.ply')) return
+  const def = plyToSplatLevel(file)
+  runLevelLoad('import', async (onProgress) => { onProgress('Reading splat file…'); return def }, "Couldn't load that splat")
+    .finally(() => URL.revokeObjectURL(def.splatUrl!))
+})
+
+// ----- Download the generated splat (.ply) -----
+// The button lives in the menu and only shows when the loaded room is a splat (canExportSplat).
+// Clicking serializes the in-memory points to a .ply blob and saves it via a throwaway link.
+const downloadSplatBtn = document.getElementById('btn-download-splat') as HTMLButtonElement
+function refreshDownloadButton() {
+  downloadSplatBtn.classList.toggle('hidden', !canExportSplat())
+}
+downloadSplatBtn.addEventListener('click', () => {
+  const blob = exportSplatPly()
+  if (!blob) return
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = 'megachameleon-room.ply'
+  a.click()
+  URL.revokeObjectURL(url)
 })
 
 // ----- HUD text (called every frame by the loop) -----

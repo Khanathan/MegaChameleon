@@ -4,6 +4,7 @@ import * as THREE from 'three'
 import { canvas, camera } from './engine'
 import { paintableParts, PAINT_CANVAS, PAINT_COLS, PAINT_ROWS, SKIN } from './chameleon'
 import { pickTargets, readHitColor } from './levels'
+import { isSplatRoom, readSplatColor } from './splatRoom'
 import { game, look, settings, BASE_SENSITIVITY, PITCH_MIN, PITCH_MAX } from './state'
 
 const paintToolbar = document.getElementById('paint-toolbar') as HTMLDivElement
@@ -172,8 +173,13 @@ function pickColor(e: MouseEvent) {
   pointer.y = -(e.clientY / window.innerHeight) * 2 + 1
   raycaster.setFromCamera(pointer, camera)
   const hit = raycaster.intersectObjects(pickTargets, false)[0]
-  if (!hit) return
-  setColor(readHitColor(hit)) // a canvas pixel (model/image wall) or a flat surface's color
+  if (hit) { setColor(readHitColor(hit)); return } // model canvas pixel or a flat/image surface
+  // splat rooms: the walls are invisible (no ray hit), so sample the splat's baked color along the
+  // camera ray instead — lets the player eyedrop the splat just like a wall.
+  if (isSplatRoom()) {
+    const c = readSplatColor(raycaster.ray.origin, raycaster.ray.direction)
+    if (c) setColor(c)
+  }
 }
 
 export function enterPaintMode() {

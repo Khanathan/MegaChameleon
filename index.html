@@ -24,6 +24,7 @@
         <h1>MegaChameleon</h1>
         <div id="map-list"></div>
         <button id="btn-play">Play</button>
+        <button id="btn-download-splat" class="hidden">&#11015; Download splat (.ply)</button>
         <button id="btn-menu-settings">Settings</button>
       </div>
     </div>
@@ -50,6 +51,14 @@
           <button id="btn-settings-back">Back</button>
           <button id="btn-settings-apply">Apply</button>
         </div>
+      </div>
+    </div>
+
+    <!-- Loading overlay: shown while a splat room is being generated (network + lift) -->
+    <div id="loading" class="overlay hidden">
+      <div class="panel">
+        <h1>Building your room…</h1>
+        <p class="hint" id="loading-text">Starting…</p>
       </div>
     </div>
 

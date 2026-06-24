@@ -5,6 +5,7 @@ import * as THREE from 'three'
 import amogusUrl from '../assets/amogus.jpeg' // Vite turns this into a bundled image URL
 import { scene } from './engine'
 import { paintableParts } from './chameleon'
+import { buildSplatRoom, buildSplatRoomFromPly, disposeSplatRoom } from './splatRoom'
 
 export type Surface = { color: string } | { image: string } // a flat color or an image url
 export interface Obstacle { size: [number, number, number]; pos: [number, number, number]; surface: Surface }
@@ -15,6 +16,12 @@ export interface LevelDefinition {
   palette: string[]            // paint-toolbar swatches
   obstacles: Obstacle[]
   seekerStart: [number, number, number]
+  splatUrl?: string            // M7: a ready-made splat file (hosted/endpoint backends)
+  splatLift?: { panoUrl: string; depthUrl: string } // M7 DIY backend: build the splat in-browser
+  splatTransform?: {           // manual orientation/placement fix for the lifted splat (M7)
+    rotation?: [number, number, number]
+    offset?: [number, number, number]
+  }
 }
 export interface LevelProvider { getLevel(id: string): Promise<LevelDefinition> }
 
@@ -57,7 +64,7 @@ function makeImageWall(imageUrl: string) {
 // build one box (wall/floor/ceiling/obstacle), flat-color or image, and register it as part of the
 // room: into the scene, into `environment` (so the eyedropper + seeker see it), and into
 // `levelMeshes` (so a map swap can dispose it).
-function buildBox(w: number, h: number, d: number, x: number, y: number, z: number, s: Surface) {
+function buildBox(w: number, h: number, d: number, x: number, y: number, z: number, s: Surface, visible = true) {
   let material: THREE.Material
   let userData: Record<string, unknown> = {}
   if ('image' in s) {
@@ -69,6 +76,7 @@ function buildBox(w: number, h: number, d: number, x: number, y: number, z: numb
   }
   const mesh = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), material)
   mesh.position.set(x, y, z)
+  mesh.visible = visible // splat rooms hide the box walls; they stay only as the collision boundary
   mesh.userData = userData
   scene.add(mesh)
   environment.push(mesh)
@@ -100,11 +108,14 @@ export function disposeLevel() {
   levelMeshes.length = 0
   environment.length = 0
   obstacleBoxes.length = 0
+  disposeSplatRoom() // free the previous splat's renderer + baked fields, if any
 }
 
 // build a whole room from a definition: size, six surfaces, obstacles, seeker start. (The palette
 // swatches are built by the caller, in ui, to keep this module free of any painting dependency.)
-export function loadLevel(def: LevelDefinition) {
+let loadGen = 0 // bumped each load so a slow splat build that finishes after a newer swap is dropped
+export async function loadLevel(def: LevelDefinition) {
+  const gen = ++loadGen
   disposeLevel()
   ROOM.width = def.size.width
   ROOM.depth = def.size.depth
@@ -112,12 +123,13 @@ export function loadLevel(def: LevelDefinition) {
   halfW = ROOM.width / 2
   halfD = ROOM.depth / 2
   const { width: W, depth: D, height: H } = def.size
-  buildBox(W, 0.2, D, 0, -0.1, 0, def.surfaces.floor)         // floor
-  buildBox(W, 0.2, D, 0, H + 0.1, 0, def.surfaces.ceiling)    // ceiling
-  buildBox(W, H, t, 0, H / 2, -halfD, def.surfaces.back)      // back wall (-z)
-  buildBox(W, H, t, 0, H / 2, halfD, def.surfaces.front)      // front wall (+z)
-  buildBox(t, H, D, -halfW, H / 2, 0, def.surfaces.left)      // left wall (-x)
-  buildBox(t, H, D, halfW, H / 2, 0, def.surfaces.right)      // right wall (+x)
+  const vis = !(def.splatLift || def.splatUrl) // splat rooms keep the box walls only as a boundary
+  buildBox(W, 0.2, D, 0, -0.1, 0, def.surfaces.floor, vis)         // floor
+  buildBox(W, 0.2, D, 0, H + 0.1, 0, def.surfaces.ceiling, vis)    // ceiling
+  buildBox(W, H, t, 0, H / 2, -halfD, def.surfaces.back, vis)      // back wall (-z)
+  buildBox(W, H, t, 0, H / 2, halfD, def.surfaces.front, vis)      // front wall (+z)
+  buildBox(t, H, D, -halfW, H / 2, 0, def.surfaces.left, vis)      // left wall (-x)
+  buildBox(t, H, D, halfW, H / 2, 0, def.surfaces.right, vis)      // right wall (+x)
   for (const o of def.obstacles) {
     buildBox(o.size[0], o.size[1], o.size[2], o.pos[0], o.pos[1], o.pos[2], o.surface)
     obstacleBoxes.push({
@@ -129,6 +141,19 @@ export function loadLevel(def: LevelDefinition) {
   // the eyedropper + seeker raycast against these; refresh them now that the room changed
   pickTargets = [...environment, ...paintableParts]
   detectTargets = [...paintableParts, ...environment]
+
+  // M7: DIY splat backend — lift the panorama+depth into a splat and bake its CPU fields. This is
+  // slow (network + lift), so guard against a newer map swap finishing first.
+  if (def.splatLift) {
+    await buildSplatRoom(def.splatLift.panoUrl, def.splatLift.depthUrl, def.size, def.splatTransform)
+    if (gen !== loadGen) disposeSplatRoom() // superseded by a newer load — drop this splat
+  } else if (def.splatUrl) {
+    // a ready-made splat file (the "import" path): fetch its bytes and build directly from them.
+    const buffer = await fetch(def.splatUrl).then((r) => r.arrayBuffer())
+    if (gen !== loadGen) return // superseded while downloading — don't bother building
+    await buildSplatRoomFromPly(buffer, def.size, def.splatTransform)
+    if (gen !== loadGen) disposeSplatRoom()
+  }
 }
 
 // the hand-made rooms
