@@ -48,16 +48,18 @@ const POLL_MS = 3000
 // player it isn't frozen.
 const MAX_POLLS = 300 // 300 * 3s = 15 minutes
 
-async function falJob<T>(kind: 'pano' | 'depth', input: unknown, onProgress: Progress, label: string): Promise<T> {
-  const { requestId } = await api<{ requestId: string }>('/api/fal', { action: 'submit', kind, input })
+// Submit a job for `imageUrl`, poll until done, and return the resulting image URL. The server picks
+// the model by `kind` and normalizes every model's output to a single { url }.
+async function falJob(kind: 'pano' | 'depth', imageUrl: string, onProgress: Progress, label: string): Promise<string> {
+  const { requestId } = await api<{ requestId: string }>('/api/fal', { action: 'submit', kind, imageUrl })
   const startedAt = performance.now()
   for (let i = 0; i < MAX_POLLS; i++) {
     await sleep(POLL_MS)
     const s = await api<{ status: string; queuePosition: number | null }>('/api/fal', { action: 'status', kind, requestId })
     const secs = Math.round((performance.now() - startedAt) / 1000)
     if (s.status === 'COMPLETED') {
-      const { data } = await api<{ data: T }>('/api/fal', { action: 'result', kind, requestId })
-      return data
+      const { url } = await api<{ url: string }>('/api/fal', { action: 'result', kind, requestId })
+      return url
     }
     const where = s.status === 'IN_QUEUE'
       ? `in queue${s.queuePosition != null ? ` (position ${s.queuePosition})` : ''}`
@@ -77,18 +79,12 @@ export async function imageToSplatLevel(file: File, onProgress: Progress): Promi
     }
   })
 
-  const pano = await step('Generating the 360° panorama', () =>
-    falJob<{ image?: { url?: string } }>(
-      'pano',
-      { image_url: imageUrl, prompt: 'interior room, same style and lighting, full 360 view' },
-      onProgress, 'Hallucinating the room (360°)',
-    ))
-  const panoUrl = pano?.image?.url
+  const panoUrl = await step('Generating the 360° panorama', () =>
+    falJob('pano', imageUrl, onProgress, 'Generating the panorama'))
   if (!panoUrl) throw new Error('Generating the 360° panorama: the service returned no image.')
 
-  const depth = await step('Estimating depth', () =>
-    falJob<{ image?: { url?: string } }>('depth', { image_url: panoUrl }, onProgress, 'Estimating depth'))
-  const depthUrl = depth?.image?.url
+  const depthUrl = await step('Estimating depth', () =>
+    falJob('depth', panoUrl, onProgress, 'Estimating depth'))
   if (!depthUrl) throw new Error('Estimating depth: the service returned no image.')
 
   onProgress('Lifting to a 3D splat…')
