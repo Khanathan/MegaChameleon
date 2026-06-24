@@ -36,6 +36,32 @@ async function api<T>(path: string, body: unknown): Promise<T> {
   }
 }
 
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
+
+// Run one fal job through the queue proxy: submit it, poll status until it finishes (reporting queue
+// position / progress as we go), then fetch the result. Each call is short, so nothing times out.
+// `kind` ('pano' | 'depth') tells the server which model to use. Returns the model's output object.
+const POLL_MS = 2000
+const MAX_POLLS = 180 // ~6 minutes — well past any real fal job; a backstop against polling forever
+
+async function falJob<T>(kind: 'pano' | 'depth', input: unknown, onProgress: Progress, label: string): Promise<T> {
+  const { requestId } = await api<{ requestId: string }>('/api/fal', { action: 'submit', kind, input })
+  for (let i = 0; i < MAX_POLLS; i++) {
+    await sleep(POLL_MS)
+    const s = await api<{ status: string; queuePosition: number | null }>('/api/fal', { action: 'status', kind, requestId })
+    if (s.status === 'COMPLETED') {
+      const { data } = await api<{ data: T }>('/api/fal', { action: 'result', kind, requestId })
+      return data
+    }
+    if (s.status === 'IN_QUEUE') {
+      onProgress(`${label} — in queue${s.queuePosition != null ? ` (position ${s.queuePosition})` : ''}…`)
+    } else {
+      onProgress(`${label}…`) // IN_PROGRESS (or any other in-flight state)
+    }
+  }
+  throw new Error(`${label}: timed out after ${Math.round((MAX_POLLS * POLL_MS) / 1000)}s waiting for fal.`)
+}
+
 export async function imageToSplatLevel(file: File, onProgress: Progress): Promise<LevelDefinition> {
   onProgress('Reading image…')
   const { imageUrl, palette } = await step('Reading the image', async () => {
@@ -46,14 +72,18 @@ export async function imageToSplatLevel(file: File, onProgress: Progress): Promi
     }
   })
 
-  onProgress('Hallucinating the room (360°)… this can take ~30–90s')
-  const { panoUrl } = await step('Generating the 360° panorama', () =>
-    api<{ panoUrl: string }>('/api/pano', { imageUrl }))
+  const pano = await step('Generating the 360° panorama', () =>
+    falJob<{ image?: { url?: string } }>(
+      'pano',
+      { image_url: imageUrl, prompt: 'interior room, same style and lighting, full 360 view' },
+      onProgress, 'Hallucinating the room (360°)',
+    ))
+  const panoUrl = pano?.image?.url
   if (!panoUrl) throw new Error('Generating the 360° panorama: the service returned no image.')
 
-  onProgress('Estimating depth…')
-  const { depthUrl } = await step('Estimating depth', () =>
-    api<{ depthUrl: string }>('/api/depth', { panoUrl }))
+  const depth = await step('Estimating depth', () =>
+    falJob<{ image?: { url?: string } }>('depth', { image_url: panoUrl }, onProgress, 'Estimating depth'))
+  const depthUrl = depth?.image?.url
   if (!depthUrl) throw new Error('Estimating depth: the service returned no image.')
 
   onProgress('Lifting to a 3D splat…')
