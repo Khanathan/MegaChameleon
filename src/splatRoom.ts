@@ -30,6 +30,11 @@ let active = false
 // standard .ply (see exportSplatPly). Cleared on dispose, so it only exists for a live splat room.
 let lastSplat: { positions: Float32Array; colors: Uint8Array; count: number; scale: number } | null = null
 
+// the AI-generated 360° panorama URL the DIY-lift room was built from, kept so the player can
+// download that source image (see fetchPanoBlob). Only the panorama-lift path sets it — an imported
+// .ply has no source panorama — and it's cleared on dispose, alongside lastSplat.
+let lastPanoUrl: string | null = null
+
 export function isSplatRoom() { return active }
 
 // voxel index helpers: world position -> grid cell. The room box spans x,z in [-W/2,W/2] and
@@ -49,6 +54,7 @@ export async function buildSplatRoom(
 ) {
   roomSize = size
   grid = GRID
+  lastPanoUrl = panoUrl // remember the source panorama so the player can download it
   const data = await liftPanoramaToPoints(panoUrl, depthUrl)
   await bakeAndRender(data, size, transform)
 }
@@ -63,6 +69,7 @@ export async function buildSplatRoomFromPly(
 ) {
   roomSize = size
   grid = GRID
+  lastPanoUrl = null // an imported .ply has no source panorama to download
   let data: SplatData
   try {
     data = parsePly(buffer)
@@ -96,6 +103,7 @@ export function disposeSplatRoom() {
   colorField = null
   countGrid = null
   lastSplat = null
+  lastPanoUrl = null
   active = false
 }
 
@@ -114,6 +122,27 @@ export function canExportSplat() { return lastSplat !== null }
 export function exportSplatPly(): Blob | null {
   if (!lastSplat) return null
   return splatToPlyBlob(lastSplat.positions, lastSplat.colors, lastSplat.count, lastSplat.scale)
+}
+
+// is there an AI-generated panorama behind the current room (the DIY-lift path, not an import)?
+export function canExportPano() { return lastPanoUrl !== null }
+
+// The "Download panorama" button: fetch the source panorama's bytes and hand them back as a blob
+// plus a sensible file extension. The lift already read this same URL's pixels, so CORS is known to
+// work. Returns null if no panorama room is loaded; throws a labeled error if the fetch fails.
+export async function fetchPanoBlob(): Promise<{ blob: Blob; ext: string } | null> {
+  if (!lastPanoUrl) return null
+  let res: Response
+  try {
+    res = await fetch(lastPanoUrl)
+    if (!res.ok) throw new Error(`the image server returned ${res.status}`)
+  } catch (err) {
+    throw new Error(`Downloading the panorama: ${errText(err)}`, { cause: err })
+  }
+  const blob = await res.blob()
+  // pick the extension from the content type fal returned (hunyuan_world serves PNG today).
+  const ext = blob.type.includes('jpeg') ? 'jpg' : blob.type.includes('webp') ? 'webp' : 'png'
+  return { blob, ext }
 }
 
 // Serialize points as a standard 3D-Gaussian-Splat binary .ply (little-endian), the same layout the

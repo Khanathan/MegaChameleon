@@ -10,7 +10,7 @@ import { spawnSeeker, seeker, suspicionBar } from './seeker'
 import { buildSwatches } from './painting'
 import { imageToLevel } from './imageLevel'
 import { imageToSplatLevel, plyToSplatLevel } from './splatLevel'
-import { canExportSplat, exportSplatPly } from './splatRoom'
+import { canExportSplat, exportSplatPly, canExportPano, fetchPanoBlob } from './splatRoom'
 import { errText } from './errors'
 
 // ----- DOM -----
@@ -233,18 +233,33 @@ addPicker('import', '+ Import Splat', '.ply', (file) => {
 // The button lives in the menu and only shows when the loaded room is a splat (canExportSplat).
 // Clicking serializes the in-memory points to a .ply blob and saves it via a throwaway link.
 const downloadSplatBtn = document.getElementById('btn-download-splat') as HTMLButtonElement
+const downloadPanoBtn = document.getElementById('btn-download-pano') as HTMLButtonElement
 function refreshDownloadButton() {
   downloadSplatBtn.classList.toggle('hidden', !canExportSplat())
+  // the panorama download only applies to AI-generated rooms (the lift path), not imported .ply files
+  downloadPanoBtn.classList.toggle('hidden', !canExportPano())
 }
-downloadSplatBtn.addEventListener('click', () => {
-  const blob = exportSplatPly()
-  if (!blob) return
+// save a blob to disk via a throwaway link (shared by both download buttons)
+function saveBlob(blob: Blob, filename: string) {
   const url = URL.createObjectURL(blob)
   const a = document.createElement('a')
   a.href = url
-  a.download = 'megachameleon-room.ply'
+  a.download = filename
   a.click()
   URL.revokeObjectURL(url)
+}
+downloadSplatBtn.addEventListener('click', () => {
+  const blob = exportSplatPly()
+  if (blob) saveBlob(blob, 'megachameleon-room.ply')
+})
+downloadPanoBtn.addEventListener('click', async () => {
+  // fetching the remote image can fail (network/CORS), so guard it and surface any error like a load.
+  try {
+    const pano = await fetchPanoBlob()
+    if (pano) saveBlob(pano.blob, `megachameleon-panorama.${pano.ext}`)
+  } catch (err) {
+    showLoadError('Downloading the panorama failed', err)
+  }
 })
 
 // ----- HUD text (called every frame by the loop) -----
