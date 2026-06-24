@@ -513,20 +513,29 @@ export function readSplatColor(point: THREE.Vector3, dir: THREE.Vector3): string
 // push a moving box out of solid voxels, one axis at a time (voxel-game style). The caller passes
 // the box centre (cx,cy,cz) and half-extents (hx,hy,hz); we return how far to nudge it. Resolving
 // per axis gives wall-sliding for free and matches the box room's per-axis push-out.
+//
+// Each face is pushed out only as far as needed — to the solid voxel's edge, then EMBED *back into*
+// the wall — instead of a full fixed-step nudge. The old fixed step floated the body ~a whole voxel
+// (1.25u) off the wall, so the seeker could see background past it; now the body presses almost
+// flush against the wall (better hiding). EMBED is a fraction of a voxel, so it can't tunnel through.
+const EMBED = 0.6 // how far (fraction of a voxel) the body may sink into the wall it rests against
 export function resolveSplatCollision(
   cx: number, cy: number, cz: number, hx: number, hy: number, hz: number,
 ): { dx: number; dy: number; dz: number } {
   const out = { dx: 0, dy: 0, dz: 0 }
   if (!countGrid) return out
-  const step = roomSize.width / grid
-  // probe the centre of each box face; if it's in a solid voxel, nudge one step the other way.
-  // coarse but cheap, and the box room is still the hard boundary behind this.
-  if (splatSolidAt(cx + hx, cy, cz)) out.dx = -step
-  else if (splatSolidAt(cx - hx, cy, cz)) out.dx = step
-  if (splatSolidAt(cx, cy + hy, cz)) out.dy = -step
-  else if (splatSolidAt(cx, cy - hy, cz)) out.dy = step
-  if (splatSolidAt(cx, cy, cz + hz)) out.dz = -step
-  else if (splatSolidAt(cx, cy, cz - hz)) out.dz = step
+  const W = roomSize.width, Hh = roomSize.height, D = roomSize.depth
+  const voxW = W / grid, voxH = Hh / grid, voxD = D / grid
+  const eX = voxW * EMBED, eY = voxH * EMBED, eZ = voxD * EMBED
+  // x: push the +x face back to its solid voxel's near edge (+EMBED in); the -x face to the far edge.
+  if (splatSolidAt(cx + hx, cy, cz)) out.dx = Math.min(0, (vx(cx + hx) * voxW - W / 2 + eX) - (cx + hx))
+  else if (splatSolidAt(cx - hx, cy, cz)) out.dx = Math.max(0, ((vx(cx - hx) + 1) * voxW - W / 2 - eX) - (cx - hx))
+  // y (the grid runs 0..height, not centred)
+  if (splatSolidAt(cx, cy + hy, cz)) out.dy = Math.min(0, (vy(cy + hy) * voxH + eY) - (cy + hy))
+  else if (splatSolidAt(cx, cy - hy, cz)) out.dy = Math.max(0, ((vy(cy - hy) + 1) * voxH - eY) - (cy - hy))
+  // z
+  if (splatSolidAt(cx, cy, cz + hz)) out.dz = Math.min(0, (vz(cz + hz) * voxD - D / 2 + eZ) - (cz + hz))
+  else if (splatSolidAt(cx, cy, cz - hz)) out.dz = Math.max(0, ((vz(cz - hz) + 1) * voxD - D / 2 - eZ) - (cz - hz))
   return out
 }
 
