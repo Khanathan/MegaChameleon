@@ -207,10 +207,13 @@ async function liftPanoramaToPoints(panoUrl: string, depthUrl: string): Promise<
     for (let px = 0; px < W; px += STRIDE) {
       const lon = (px / W) * 2 * Math.PI - Math.PI // -pi..pi around
       const i = (py * W + px) * 4
-      // depth maps store distance as brightness; read the red channel as 0..1 and scale. We treat
-      // brighter = farther. If the chosen depth model uses the opposite convention (near = bright),
-      // the room comes out inside-out — fix by inverting here: use (1 - sampleDepth/255).
-      const dist = (sampleDepth(depth, px / W, py / H) / 255) * (roomSize.width * 0.6) + 0.5
+      // Depth Anything (our default depth model) outputs DISPARITY: near = bright, far = dark. So we
+      // INVERT the red channel (1 - v) to get distance — bright floor becomes near, dark ceiling/far
+      // walls become far. Without the invert most of the image (the dark walls/ceiling) collapses to
+      // distance ~0, the whole textured room shrinks to a speck, and the room looks empty. If you
+      // swap FAL_DEPTH_MODEL to one that outputs true depth (far = bright), drop the `1 - `.
+      const v = sampleDepth(depth, px / W, py / H) / 255
+      const dist = (1 - v) * (roomSize.width * 0.6) + 0.5
       // equirect direction -> unit vector (y up)
       positions.push(cosLat * Math.sin(lon) * dist, sinLat * dist, cosLat * Math.cos(lon) * dist)
       colors.push(pano.data[i], pano.data[i + 1], pano.data[i + 2])
