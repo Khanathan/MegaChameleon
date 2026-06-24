@@ -210,7 +210,7 @@ function splatToPlyBlob(p: Float32Array, c: Uint8Array, count: number, scale: nu
 // For each pixel of the panorama we know its direction (longitude/latitude from the equirect
 // layout) and its distance (the depth map). direction * distance = a 3D point; the panorama pixel
 // is its color. We stride over pixels to keep the point count sane.
-const STRIDE = 3 // sample every Nth pixel each axis (1920x960 / 3 ~= 200k points)
+const STRIDE = 4 // sample every Nth pixel each axis (1408x704 / 4 ~= 62k points — fewer = less sort/fill lag)
 
 async function liftPanoramaToPoints(panoUrl: string, depthUrl: string): Promise<SplatData> {
   const [pano, depth] = await Promise.all([
@@ -518,10 +518,12 @@ async function renderPoints(data: SplatData, SCALE: number) {
 
   const blobUrl = URL.createObjectURL(splatToPlyBlob(data.positions, data.colors, data.count, SCALE))
   try {
-    // CPU sort (default) is more compatible across browsers/Three versions than gpuAcceleratedSort,
-    // which can silently fail and leave the gaussians unsorted and invisible. sharedMemoryForWorkers
-    // false avoids needing cross-origin-isolation (COOP/COEP) headers a plain Vercel deploy lacks.
-    const dropIn = new GS.DropInViewer({ gpuAcceleratedSort: false, sharedMemoryForWorkers: false })
+    // CPU sort (default) is more compatible than gpuAcceleratedSort, which silently fails here and
+    // leaves the gaussians invisible. The sort runs in a worker; with cross-origin isolation on (the
+    // COOP/COEP headers in vercel.json) it reads the gaussians via SharedArrayBuffer instead of
+    // copying them every camera move — the difference between smooth and very laggy. `crossOriginIsolated`
+    // is false if those headers aren't active (e.g. `vite dev`), in which case it safely falls back to copying.
+    const dropIn = new GS.DropInViewer({ gpuAcceleratedSort: false, sharedMemoryForWorkers: crossOriginIsolated })
     await dropIn.addSplatScene(blobUrl, {
       format: GS.SceneFormat.Ply,
       showLoadingUI: false,
