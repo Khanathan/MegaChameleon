@@ -2,7 +2,9 @@
 import * as THREE from 'three'
 
 // ----- Renderer: draws the 3D picture onto the screen -----
-export const renderer = new THREE.WebGLRenderer({ antialias: true })
+// preserveDrawingBuffer keeps the last frame readable after it's drawn, so the paint eyedropper can
+// read the exact pixel under the cursor on click (a one-off GPU read — not the per-frame path).
+export const renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true })
 renderer.setSize(window.innerWidth, window.innerHeight)
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2)) // cap pixels drawn (speed)
 renderer.toneMapping = THREE.ACESFilmicToneMapping           // filmic look, gentle highlight rolloff

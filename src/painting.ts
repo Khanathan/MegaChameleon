@@ -1,10 +1,8 @@
 // Painting (paint sub-mode, Q during hiding): tools, the toolbar, custom cursors, and drawing
 // onto the chameleon's per-part canvases. Also reads colors off surfaces for the eyedropper.
 import * as THREE from 'three'
-import { canvas, camera } from './engine'
+import { canvas, camera, renderer } from './engine'
 import { paintableParts, PAINT_CANVAS, PAINT_COLS, PAINT_ROWS, SKIN } from './chameleon'
-import { pickTargets, readHitColor } from './levels'
-import { isSplatRoom, readSplatColor } from './splatRoom'
 import { game, look, settings, BASE_SENSITIVITY, PITCH_MIN, PITCH_MAX } from './state'
 
 const paintToolbar = document.getElementById('paint-toolbar') as HTMLDivElement
@@ -167,23 +165,24 @@ function fillAll() {
   }
 }
 
-// pick = sample the color under the cursor, from the model OR a room surface
+// pick = read the actual rendered pixel under the cursor, straight off the WebGL canvas. This is the
+// most faithful "what you see is what you get": it samples whatever was last drawn there — splat,
+// model, or wall — exactly as displayed (lighting + tone-mapping included). A GPU read-back is fine
+// HERE because it's a one-off on click, not the per-frame path (the seeker still judges from known
+// colors, never a read-back). Needs preserveDrawingBuffer on the renderer (set in engine.ts).
+const _pixel = new Uint8Array(4) // reused, no per-click garbage
 function pickColor(e: MouseEvent) {
-  pointer.x = (e.clientX / window.innerWidth) * 2 - 1
-  pointer.y = -(e.clientY / window.innerHeight) * 2 + 1
-  raycaster.setFromCamera(pointer, camera)
-  // Take the nearest VISIBLE hit. A splat room keeps its box walls only as a collision boundary
-  // (visible=false), but the raycaster still intersects them (Three ignores `visible`) — so without
-  // this filter the ray would hit the grey boundary wall and the eyedropper would read that instead
-  // of the splat. The chameleon model stays pickable (its parts are visible).
-  const hit = raycaster.intersectObjects(pickTargets, false).find((h) => (h.object as THREE.Mesh).visible)
-  if (hit) { setColor(readHitColor(hit)); return } // model canvas pixel or a flat/image surface
-  // splat rooms: no visible wall was hit, so sample the splat's baked color along the camera ray
-  // instead — lets the player eyedrop the splat just like a wall.
-  if (isSplatRoom()) {
-    const c = readSplatColor(raycaster.ray.origin, raycaster.ray.direction)
-    if (c) setColor(c)
-  }
+  const rect = canvas.getBoundingClientRect()
+  // Map the cursor (CSS pixels) to drawing-buffer pixels. canvas.width/height already include the
+  // device pixel ratio, so this works on hi-dpi screens without any extra math.
+  const bw = canvas.width, bh = canvas.height
+  const x = Math.max(0, Math.min(bw - 1, Math.floor(((e.clientX - rect.left) / rect.width) * bw)))
+  const yTop = Math.max(0, Math.min(bh - 1, Math.floor(((e.clientY - rect.top) / rect.height) * bh)))
+  const gl = renderer.getContext()
+  gl.bindFramebuffer(gl.FRAMEBUFFER, null)            // read the on-screen framebuffer (not a target)
+  // WebGL's framebuffer origin is bottom-left, so flip y from our top-left cursor coordinate.
+  gl.readPixels(x, bh - 1 - yTop, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, _pixel)
+  setColor('#' + [_pixel[0], _pixel[1], _pixel[2]].map((n) => n.toString(16).padStart(2, '0')).join(''))
 }
 
 export function enterPaintMode() {
