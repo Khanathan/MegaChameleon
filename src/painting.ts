@@ -172,10 +172,14 @@ function pickColor(e: MouseEvent) {
   pointer.x = (e.clientX / window.innerWidth) * 2 - 1
   pointer.y = -(e.clientY / window.innerHeight) * 2 + 1
   raycaster.setFromCamera(pointer, camera)
-  const hit = raycaster.intersectObjects(pickTargets, false)[0]
+  // Take the nearest VISIBLE hit. A splat room keeps its box walls only as a collision boundary
+  // (visible=false), but the raycaster still intersects them (Three ignores `visible`) — so without
+  // this filter the ray would hit the grey boundary wall and the eyedropper would read that instead
+  // of the splat. The chameleon model stays pickable (its parts are visible).
+  const hit = raycaster.intersectObjects(pickTargets, false).find((h) => (h.object as THREE.Mesh).visible)
   if (hit) { setColor(readHitColor(hit)); return } // model canvas pixel or a flat/image surface
-  // splat rooms: the walls are invisible (no ray hit), so sample the splat's baked color along the
-  // camera ray instead — lets the player eyedrop the splat just like a wall.
+  // splat rooms: no visible wall was hit, so sample the splat's baked color along the camera ray
+  // instead — lets the player eyedrop the splat just like a wall.
   if (isSplatRoom()) {
     const c = readSplatColor(raycaster.ray.origin, raycaster.ray.direction)
     if (c) setColor(c)
