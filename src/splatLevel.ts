@@ -41,23 +41,28 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 // Run one fal job through the queue proxy: submit it, poll status until it finishes (reporting queue
 // position / progress as we go), then fetch the result. Each call is short, so nothing times out.
 // `kind` ('pano' | 'depth') tells the server which model to use. Returns the model's output object.
-const POLL_MS = 2000
-const MAX_POLLS = 180 // ~6 minutes — well past any real fal job; a backstop against polling forever
+const POLL_MS = 3000
+// Backstop against polling forever. Hunyuan World is a heavy world-gen model and, on a busy fal
+// queue, a panorama can take many minutes — so this is deliberately generous (failing slow beats
+// failing early on a job that would have finished). The elapsed seconds shown below reassure the
+// player it isn't frozen.
+const MAX_POLLS = 300 // 300 * 3s = 15 minutes
 
 async function falJob<T>(kind: 'pano' | 'depth', input: unknown, onProgress: Progress, label: string): Promise<T> {
   const { requestId } = await api<{ requestId: string }>('/api/fal', { action: 'submit', kind, input })
+  const startedAt = performance.now()
   for (let i = 0; i < MAX_POLLS; i++) {
     await sleep(POLL_MS)
     const s = await api<{ status: string; queuePosition: number | null }>('/api/fal', { action: 'status', kind, requestId })
+    const secs = Math.round((performance.now() - startedAt) / 1000)
     if (s.status === 'COMPLETED') {
       const { data } = await api<{ data: T }>('/api/fal', { action: 'result', kind, requestId })
       return data
     }
-    if (s.status === 'IN_QUEUE') {
-      onProgress(`${label} — in queue${s.queuePosition != null ? ` (position ${s.queuePosition})` : ''}…`)
-    } else {
-      onProgress(`${label}…`) // IN_PROGRESS (or any other in-flight state)
-    }
+    const where = s.status === 'IN_QUEUE'
+      ? `in queue${s.queuePosition != null ? ` (position ${s.queuePosition})` : ''}`
+      : 'generating' // IN_PROGRESS (or any other in-flight state)
+    onProgress(`${label} — ${where}… ${secs}s`)
   }
   throw new Error(`${label}: timed out after ${Math.round((MAX_POLLS * POLL_MS) / 1000)}s waiting for fal.`)
 }
