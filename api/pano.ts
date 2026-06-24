@@ -5,6 +5,7 @@
 // This is a Vite project, so the function runs on Vercel's Node runtime: the handler is called as
 // (req, res) and MUST end by sending through `res` — returning a Response (the web/edge style) just
 // hangs the request. Setup: `vercel env add FAL_KEY` (FAL_KEY is fal.ai's standard variable name).
+/// <reference types="node" />
 import type { VercelRequest, VercelResponse } from '@vercel/node'
 import { fal } from '@fal-ai/client'
 

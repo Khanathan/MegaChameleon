@@ -12,6 +12,7 @@
 // All three take `image_url` and return the depth map at result.data.image.url (verified on fal.ai).
 // Caveat for the playtest: depth models disagree on brightness convention (near-bright vs far-bright).
 // The lift in splatRoom treats brighter = farther; if the room comes out inside-out, invert there.
+/// <reference types="node" />
 import type { VercelRequest, VercelResponse } from '@vercel/node'
 import { fal } from '@fal-ai/client'
 

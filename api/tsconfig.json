@@ -1,8 +1,9 @@
 {
-  // Type config for the Vercel serverless functions only. The root tsconfig.json is tuned for the
-  // browser (`"types": ["vite/client"]`), which hides Node globals like `process` — so the
-  // functions get their own config that pulls in Node types instead. The root `tsc` (build script)
-  // only includes `src`, so it never touches this folder; Vercel uses this when building /api.
+  // Type config for the Vercel serverless functions, used by editors/IntelliSense (they pick the
+  // nearest tsconfig) and for a local check: `npx tsc -p api/tsconfig.json`. The root tsconfig is
+  // browser-tuned (`"types": ["vite/client"]`), which hides Node globals like `process`; this pulls
+  // in Node types instead. NOTE: Vercel's function builder ignores this and uses the ROOT tsconfig,
+  // so each function ALSO carries a `/// <reference types="node" />` line to resolve `process` there.
   "compilerOptions": {
     "target": "es2023",
     "lib": ["ES2023"],
