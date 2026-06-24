@@ -2,7 +2,6 @@
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "headers": [
     {
-      "//": "Cross-origin isolation lets the splat renderer sort gaussians via SharedArrayBuffer (no per-frame data copy = far less lag). Safe here: our only cross-origin loads are fal.media images, fetched with crossOrigin=anonymous and served with access-control-allow-origin: *.",
       "source": "/(.*)",
       "headers": [
         { "key": "Cross-Origin-Opener-Policy", "value": "same-origin" },
