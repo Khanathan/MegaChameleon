@@ -87,10 +87,9 @@ async function bakeAndRender(
 ) {
   fitPointsToRoom(data, size, transform) // scale+center the cloud so it fills the room box
   bakeFields(data)
-  // Gaussian size ≈ the spacing between lifted points. Too big (was 0.6 of a voxel ≈ 0.75u) and the
-  // isotropic blobs blur together into a shapeless cloud; this smaller size keeps the panorama's
-  // texture detail readable. Tune if it looks sparse (raise) or muddy (lower).
-  const splatScale = (roomSize.width / grid) * 0.28
+  // Gaussian size. Smaller = sharper/less cloudy (playtested ~0.25u looks best); too small = sparse
+  // gaps. The [ and ] keys live-tune this in a splat room if you want to re-judge it.
+  const splatScale = (roomSize.width / grid) * 0.2
   lastSplat = { positions: data.positions, colors: data.colors, count: data.count, scale: splatScale }
   await renderPoints(data, splatScale) // hand the points to the splat library (the one playtest seam)
   active = true
@@ -211,11 +210,9 @@ function splatToPlyBlob(p: Float32Array, c: Uint8Array, count: number, scale: nu
 // layout) and its distance (the depth map). direction * distance = a 3D point; the panorama pixel
 // is its color. We stride over pixels to keep the point count sane.
 const STRIDE = 4 // sample every Nth pixel each axis (1408x704 / 4 ~= 62k points — fewer = less sort/fill lag)
-// Near the poles (straight up/down) every longitude pixel converges on the vertical axis, and the
-// depth there is the least reliable — together they make a spike/cone up the room's centre. Skip
-// rows beyond this latitude so the ceiling/floor caps (and their spikes) are dropped; the walls and
-// most of the floor/ceiling (within the limit) stay.
-const POLE_LIMIT = (72 * Math.PI) / 180
+// Skip just the singular pole tips (where every longitude pixel lands on one point); the box clamp
+// below handles the rest of the ceiling/floor, so we keep most of them.
+const POLE_LIMIT = (85 * Math.PI) / 180
 
 async function liftPanoramaToPoints(panoUrl: string, depthUrl: string): Promise<SplatData> {
   const [pano, depth] = await Promise.all([
@@ -225,24 +222,32 @@ async function liftPanoramaToPoints(panoUrl: string, depthUrl: string): Promise<
   const W = pano.width, H = pano.height
   const positions: number[] = []
   const colors: number[] = []
-  const maxDist = roomSize.width * 0.5 // cap distance so a stray far-reading pixel can't spike out
+  // half-extents of the room box, with the capture point (origin) at its centre. We cap each ray at
+  // this box so the room is box-shaped (flat ceiling/floor/walls) instead of a depth-blob.
+  const hx = roomSize.width / 2, hy = roomSize.height / 2, hz = roomSize.depth / 2
   for (let py = 0; py < H; py += STRIDE) {
     // latitude: top row (+pi/2) down to bottom row (-pi/2)
     const lat = (0.5 - py / H) * Math.PI
-    if (Math.abs(lat) > POLE_LIMIT) continue // skip the distorted pole caps that form the centre cone
+    if (Math.abs(lat) > POLE_LIMIT) continue // skip the singular pole tips
     const cosLat = Math.cos(lat), sinLat = Math.sin(lat)
     for (let px = 0; px < W; px += STRIDE) {
       const lon = (px / W) * 2 * Math.PI - Math.PI // -pi..pi around
       const i = (py * W + px) * 4
+      // equirect direction -> unit vector (y up)
+      const dirx = cosLat * Math.sin(lon), diry = sinLat, dirz = cosLat * Math.cos(lon)
       // Depth Anything (our default depth model) outputs DISPARITY: near = bright, far = dark. So we
       // INVERT the red channel (1 - v) to get distance — bright floor becomes near, dark ceiling/far
       // walls become far. Without the invert most of the image (the dark walls/ceiling) collapses to
-      // distance ~0, the whole textured room shrinks to a speck, and the room looks empty. If you
-      // swap FAL_DEPTH_MODEL to one that outputs true depth (far = bright), drop the `1 - `.
+      // distance ~0, the room shrinks to a speck and looks empty. If FAL_DEPTH_MODEL outputs true
+      // depth (far = bright), drop the `1 - `.
       const v = sampleDepth(depth, px / W, py / H) / 255
-      const dist = Math.min((1 - v) * (roomSize.width * 0.6) + 0.5, maxDist)
-      // equirect direction -> unit vector (y up)
-      positions.push(cosLat * Math.sin(lon) * dist, sinLat * dist, cosLat * Math.cos(lon) * dist)
+      const depthDist = (1 - v) * (roomSize.width * 0.6) + 0.5
+      // distance from the capture point to the room box along this ray. Capping the depth at it makes
+      // the ceiling/floor/walls flat (no pole cone); depth can still pull a surface NEARER than the
+      // box (furniture you hide behind), it just can't push one past the wall.
+      const boxDist = Math.min(hx / (Math.abs(dirx) + 1e-6), hy / (Math.abs(diry) + 1e-6), hz / (Math.abs(dirz) + 1e-6))
+      const dist = Math.min(depthDist, boxDist)
+      positions.push(dirx * dist, diry * dist, dirz * dist)
       colors.push(pano.data[i], pano.data[i + 1], pano.data[i + 2])
     }
   }
