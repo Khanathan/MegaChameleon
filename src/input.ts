@@ -6,6 +6,7 @@ import { chameleon } from './chameleon'
 import { game, look, settings, keys, BASE_SENSITIVITY, PITCH_MIN, PITCH_MAX } from './state'
 import { enterPaintMode, exitPaintMode, selectTool, TOOL_KEYS } from './painting'
 import { startSeek, pause, resume, isSettingsOpen, showConfirm } from './ui'
+import { isSplatRoom, retuneGaussianSize } from './splatRoom'
 
 // ----- Which keys are held -----
 window.addEventListener('keydown', (e) => {
@@ -77,6 +78,13 @@ document.addEventListener('fullscreenchange', () => {
       document.pointerLockElement !== canvas) {
     canvas.requestPointerLock()
   }
+})
+
+// ----- Splat tuning ([ smaller, ] bigger gaussians): only in a splat room, live re-render -----
+window.addEventListener('keydown', (e) => {
+  if (game.paused || !isSplatRoom() || game.state !== 'hiding') return
+  if (e.key === '[') retuneGaussianSize(0.8)
+  else if (e.key === ']') retuneGaussianSize(1.25)
 })
 
 // ----- Hide-phase key flow: Q paint toggle, 1-4 tools, Y/N finish-hiding -----

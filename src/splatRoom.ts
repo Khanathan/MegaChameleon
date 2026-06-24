@@ -113,6 +113,23 @@ export function disposeSplatRoom() {
 // called every frame from the loop; the splat library re-sorts its gaussians per view
 export function updateSplatRoom() { viewer?.update?.() }
 
+// Live tuning ([ and ] keys): re-render the current splat with the gaussian size scaled by `mult`,
+// so a good size can be dialed in by eye without re-running the whole fal pipeline. Logs the value
+// to the console so it can be baked in as the default afterwards.
+export async function retuneGaussianSize(mult: number) {
+  if (!lastSplat) return
+  const newScale = Math.max(0.02, lastSplat.scale * mult)
+  if (viewer) {
+    if (viewer.object) scene.remove(viewer.object)
+    viewer.dispose?.()
+    viewer = null
+  }
+  lastSplat.scale = newScale
+  await renderPoints({ positions: lastSplat.positions, colors: lastSplat.colors, count: lastSplat.count }, newScale)
+  const factor = newScale / (roomSize.width / grid)
+  console.log(`[splat] gaussian size → ${newScale.toFixed(3)} (voxel factor ${factor.toFixed(3)} — bake this into bakeAndRender)`)
+}
+
 // ----- let the player download the generated room as a real Gaussian-splat .ply -----
 // SH degree-0 basis constant: the conversion factor between a plain 0..1 color and the f_dc
 // coefficient that splat files store (color = 0.5 + C0 * f_dc).
