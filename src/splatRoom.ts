@@ -483,9 +483,25 @@ async function renderPoints(data: SplatData, SCALE: number) {
   } catch (err) {
     throw new Error('Rendering the splat: could not load the renderer (@mkkellogg/gaussian-splats-3d)', { cause: err })
   }
+
+  // --- diagnostics: confirm the points are real and at sane room-scale coords before we hand them off
+  const p = data.positions
+  let mnx = Infinity, mny = Infinity, mnz = Infinity, mxx = -Infinity, mxy = -Infinity, mxz = -Infinity
+  for (let i = 0; i < data.count; i++) {
+    const x = p[i * 3], y = p[i * 3 + 1], z = p[i * 3 + 2]
+    if (x < mnx) mnx = x; if (x > mxx) mxx = x
+    if (y < mny) mny = y; if (y > mxy) mxy = y
+    if (z < mnz) mnz = z; if (z > mxz) mxz = z
+  }
+  const f1 = (n: number) => n.toFixed(1)
+  console.log(`[splat] ${data.count} pts · bbox x[${f1(mnx)},${f1(mxx)}] y[${f1(mny)},${f1(mxy)}] z[${f1(mnz)},${f1(mxz)}] · gaussian ${SCALE.toFixed(3)} · sample color`, data.colors.slice(0, 6))
+
   const blobUrl = URL.createObjectURL(splatToPlyBlob(data.positions, data.colors, data.count, SCALE))
   try {
-    const dropIn = new GS.DropInViewer({ gpuAcceleratedSort: true, sharedMemoryForWorkers: false })
+    // CPU sort (default) is more compatible across browsers/Three versions than gpuAcceleratedSort,
+    // which can silently fail and leave the gaussians unsorted and invisible. sharedMemoryForWorkers
+    // false avoids needing cross-origin-isolation (COOP/COEP) headers a plain Vercel deploy lacks.
+    const dropIn = new GS.DropInViewer({ gpuAcceleratedSort: false, sharedMemoryForWorkers: false })
     await dropIn.addSplatScene(blobUrl, {
       format: GS.SceneFormat.Ply,
       showLoadingUI: false,
@@ -493,7 +509,11 @@ async function renderPoints(data: SplatData, SCALE: number) {
     })
     scene.add(dropIn)
     viewer = { object: dropIn, dispose: () => dropIn.dispose?.(), update: () => dropIn.update?.() }
+    // how many gaussians did the library actually load? 0 here = the .ply didn't parse as expected.
+    const loaded = dropIn.getSplatCount?.() ?? dropIn.splatMesh?.getSplatCount?.()
+    console.log('[splat] addSplatScene OK · loaded splats:', loaded, '· added to scene:', scene.children.includes(dropIn))
   } catch (err) {
+    console.error('[splat] render failed:', err)
     throw new Error(`Rendering the splat: the renderer failed on ${data.count} points`, { cause: err })
   } finally {
     URL.revokeObjectURL(blobUrl)
