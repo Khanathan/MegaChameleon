@@ -4,7 +4,7 @@
 // collision read every frame. It imports only `three` + `engine` (never `levels`), so there's no
 // import cycle — callers in levels/seeker/controls/painting import THIS, downward.
 import * as THREE from 'three'
-import { scene, renderer, camera } from './engine'
+import { scene } from './engine'
 import { errText } from './errors'
 
 // ----- the gaussians, as plain arrays we own -----
@@ -110,13 +110,18 @@ const SH_C0 = 0.28209479177387814
 // is there a splat room loaded right now that we could hand back as a file?
 export function canExportSplat() { return lastSplat !== null }
 
-// Serialize the current room's points as a standard 3D-Gaussian-Splat binary .ply (little-endian),
-// the same layout the INRIA/3DGS tools write — so the file opens in SuperSplat, the mkkellogg
-// viewer, Blender add-ons, etc. Per point: position, zero normals, the color as a degree-0 SH
-// coefficient (f_dc), opacity stored pre-sigmoid, scale stored as a log, and an identity rotation.
+// The player's download button: hand back the current room as a .ply, or null if no splat is loaded.
 export function exportSplatPly(): Blob | null {
   if (!lastSplat) return null
-  const { positions: p, colors: c, count, scale } = lastSplat
+  return splatToPlyBlob(lastSplat.positions, lastSplat.colors, lastSplat.count, lastSplat.scale)
+}
+
+// Serialize points as a standard 3D-Gaussian-Splat binary .ply (little-endian), the same layout the
+// INRIA/3DGS tools write — so the file opens in SuperSplat, Blender add-ons, etc. We use it both for
+// the player's download AND to feed the renderer, which loads .ply through its own PlyLoader (its
+// raw-point class isn't a public export in this version). Per point: position, zero normals, the
+// color as a degree-0 SH coefficient (f_dc), opacity pre-sigmoid, log scale, and identity rotation.
+function splatToPlyBlob(p: Float32Array, c: Uint8Array, count: number, scale: number): Blob {
   const FIELDS = 17 // x y z · nx ny nz · f_dc_0..2 · opacity · scale_0..2 · rot_0..3
   const header =
     'ply\n' +
@@ -434,10 +439,11 @@ export function resolveSplatCollision(
 }
 
 // ===== render the points via the splat library =====
-// PLAYTEST SEAM: the exact gaussian-splats-3d API for adding raw point data varies by version.
-// We dynamically import it (keeps it out of the main bundle) and build an in-memory splat from our
-// own positions+colors. Verify the SplatBuffer/DropInViewer calls against the installed version
-// when you first run this — the surrounding bake/collision/color logic does NOT depend on it.
+// We serialize our points to a standard .ply (splatToPlyBlob) and load it through the library's own
+// PlyLoader via DropInViewer.addSplatScene — the supported public path. (Its raw-point builder
+// class, UncompressedSplatArray, is NOT a public export in 0.4.7, so we go through .ply instead.)
+// `sharedMemoryForWorkers: false` avoids needing cross-origin-isolation (COOP/COEP) headers, which
+// a plain Vercel deploy doesn't send; without it the splat sort worker can't start.
 async function renderPoints(data: SplatData, SCALE: number) {
   let GS: any
   try {
@@ -445,26 +451,19 @@ async function renderPoints(data: SplatData, SCALE: number) {
   } catch (err) {
     throw new Error('Rendering the splat: could not load the renderer (@mkkellogg/gaussian-splats-3d)', { cause: err })
   }
+  const blobUrl = URL.createObjectURL(splatToPlyBlob(data.positions, data.colors, data.count, SCALE))
   try {
-    // Build an uncompressed splat array: per point a position, a tiny isotropic scale, identity
-    // rotation, full opacity, and the lifted color.
-    const splatArray = new GS.UncompressedSplatArray()
-    const p = data.positions, c = data.colors
-    for (let i = 0; i < data.count; i++) {
-      splatArray.addSplat(
-        p[i * 3], p[i * 3 + 1], p[i * 3 + 2],
-        SCALE, SCALE, SCALE,
-        1, 0, 0, 0,                           // identity quaternion (w,x,y,z)
-        c[i * 3], c[i * 3 + 1], c[i * 3 + 2], 255,
-      )
-    }
-    const buffer = GS.SplatBufferGenerator.getStandardGenerator(0.5, 1)
-      .generateFromUncompressedSplatArray(splatArray)
-    const dropIn = new GS.DropInViewer({ renderer, camera, gpuAcceleratedSort: true })
-    await dropIn.addSplatBuffers([buffer], [{ showLoadingUI: false }])
+    const dropIn = new GS.DropInViewer({ gpuAcceleratedSort: true, sharedMemoryForWorkers: false })
+    await dropIn.addSplatScene(blobUrl, {
+      format: GS.SceneFormat.Ply,
+      showLoadingUI: false,
+      progressiveLoad: false, // load it all before resolving, so the blob URL is safe to revoke
+    })
     scene.add(dropIn)
     viewer = { object: dropIn, dispose: () => dropIn.dispose?.(), update: () => dropIn.update?.() }
   } catch (err) {
     throw new Error(`Rendering the splat: the renderer failed on ${data.count} points`, { cause: err })
+  } finally {
+    URL.revokeObjectURL(blobUrl)
   }
 }
