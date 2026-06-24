@@ -13,8 +13,14 @@ import { errText } from './errors'
 interface SplatData {
   positions: Float32Array // x,y,z per point (world space, already fitted to the room)
   colors: Uint8Array      // r,g,b per point (0-255)
+  sizes: Float32Array     // per-point gaussian size (world units) — bigger for far points so the
+                          // widening angular spacing stays covered (no "gridded" gaps far from centre)
   count: number
 }
+
+// global multiplier on the per-point sizes, nudged live by the [ and ] keys (see retuneGaussianSize)
+const DEFAULT_SIZE_MULT = 1
+let sizeMult = DEFAULT_SIZE_MULT
 
 // ----- baked CPU fields (built once at load) -----
 const GRID = 40                 // voxels per axis over the room box (collision + color sampling)
@@ -28,7 +34,7 @@ let active = false
 
 // the fitted points of the room currently loaded, kept so the player can download the splat as a
 // standard .ply (see exportSplatPly). Cleared on dispose, so it only exists for a live splat room.
-let lastSplat: { positions: Float32Array; colors: Uint8Array; count: number; scale: number } | null = null
+let lastSplat: SplatData | null = null
 
 // the AI-generated 360° panorama URL the DIY-lift room was built from, kept so the player can
 // download that source image (see fetchPanoBlob). Only the panorama-lift path sets it — an imported
@@ -85,13 +91,11 @@ async function bakeAndRender(
   size: { width: number; depth: number; height: number },
   transform?: { rotation?: [number, number, number]; offset?: [number, number, number] },
 ) {
-  fitPointsToRoom(data, size, transform) // scale+center the cloud so it fills the room box
+  fitPointsToRoom(data, size, transform) // scale+center the cloud (and its per-point sizes) to the box
   bakeFields(data)
-  // Gaussian size. Smaller = sharper/less cloudy (playtested ~0.25u looks best); too small = sparse
-  // gaps. The [ and ] keys live-tune this in a splat room if you want to re-judge it.
-  const splatScale = (roomSize.width / grid) * 0.2
-  lastSplat = { positions: data.positions, colors: data.colors, count: data.count, scale: splatScale }
-  await renderPoints(data, splatScale) // hand the points to the splat library (the one playtest seam)
+  sizeMult = DEFAULT_SIZE_MULT // reset the live-tune multiplier for the new room
+  lastSplat = data
+  await renderPoints(data, sizeMult) // hand the points to the splat library (the one playtest seam)
   active = true
 }
 
@@ -112,21 +116,19 @@ export function disposeSplatRoom() {
 // called every frame from the loop; the splat library re-sorts its gaussians per view
 export function updateSplatRoom() { viewer?.update?.() }
 
-// Live tuning ([ and ] keys): re-render the current splat with the gaussian size scaled by `mult`,
-// so a good size can be dialed in by eye without re-running the whole fal pipeline. Logs the value
-// to the console so it can be baked in as the default afterwards.
+// Live tuning ([ and ] keys): re-render the current splat with all per-point sizes scaled by `mult`,
+// so the overall density can be dialed in by eye without re-running the whole fal pipeline. The
+// per-point sizing (small near, big far) is preserved; this just scales the whole set up or down.
 export async function retuneGaussianSize(mult: number) {
   if (!lastSplat) return
-  const newScale = Math.max(0.02, lastSplat.scale * mult)
+  sizeMult = Math.max(0.05, Math.min(8, sizeMult * mult))
   if (viewer) {
     if (viewer.object) scene.remove(viewer.object)
     viewer.dispose?.()
     viewer = null
   }
-  lastSplat.scale = newScale
-  await renderPoints({ positions: lastSplat.positions, colors: lastSplat.colors, count: lastSplat.count }, newScale)
-  const factor = newScale / (roomSize.width / grid)
-  console.log(`[splat] gaussian size → ${newScale.toFixed(3)} (voxel factor ${factor.toFixed(3)} — bake this into bakeAndRender)`)
+  await renderPoints(lastSplat, sizeMult)
+  console.log(`[splat] size multiplier → ${sizeMult.toFixed(2)} (bake this into DEFAULT_SIZE_MULT if it looks right)`)
 }
 
 // ----- let the player download the generated room as a real Gaussian-splat .ply -----
@@ -140,7 +142,7 @@ export function canExportSplat() { return lastSplat !== null }
 // The player's download button: hand back the current room as a .ply, or null if no splat is loaded.
 export function exportSplatPly(): Blob | null {
   if (!lastSplat) return null
-  return splatToPlyBlob(lastSplat.positions, lastSplat.colors, lastSplat.count, lastSplat.scale)
+  return splatToPlyBlob(lastSplat, sizeMult)
 }
 
 // is there an AI-generated panorama behind the current room (the DIY-lift path, not an import)?
@@ -169,7 +171,8 @@ export async function fetchPanoBlob(): Promise<{ blob: Blob; ext: string } | nul
 // the player's download AND to feed the renderer, which loads .ply through its own PlyLoader (its
 // raw-point class isn't a public export in this version). Per point: position, zero normals, the
 // color as a degree-0 SH coefficient (f_dc), opacity pre-sigmoid, log scale, and identity rotation.
-function splatToPlyBlob(p: Float32Array, c: Uint8Array, count: number, scale: number): Blob {
+function splatToPlyBlob(data: SplatData, mult: number): Blob {
+  const { positions: p, colors: c, sizes, count } = data
   const FIELDS = 17 // x y z · nx ny nz · f_dc_0..2 · opacity · scale_0..2 · rot_0..3
   const header =
     'ply\n' +
@@ -185,18 +188,18 @@ function splatToPlyBlob(p: Float32Array, c: Uint8Array, count: number, scale: nu
   const headerBytes = new TextEncoder().encode(header)
   const body = new ArrayBuffer(count * FIELDS * 4)
   const view = new DataView(body)
-  const logScale = Math.log(scale)
   const OPACITY = 8 // pre-sigmoid; sigmoid(8) ~= 1, i.e. fully opaque after the viewer activates it
   let o = 0
   const f = (v: number) => { view.setFloat32(o, v, true); o += 4 }
   for (let i = 0; i < count; i++) {
+    const ls = Math.log(Math.max(0.01, sizes[i] * mult)) // per-point isotropic size, stored as log
     f(p[i * 3]); f(p[i * 3 + 1]); f(p[i * 3 + 2])        // position
     f(0); f(0); f(0)                                      // normals (splats ignore these)
     f((c[i * 3] / 255 - 0.5) / SH_C0)                     // color -> degree-0 SH (f_dc)
     f((c[i * 3 + 1] / 255 - 0.5) / SH_C0)
     f((c[i * 3 + 2] / 255 - 0.5) / SH_C0)
     f(OPACITY)                                            // opacity (pre-sigmoid)
-    f(logScale); f(logScale); f(logScale)                // isotropic scale (stored as log)
+    f(ls); f(ls); f(ls)                                  // scale (log)
     f(1); f(0); f(0); f(0)                                // identity rotation (w,x,y,z)
   }
   const out = new Uint8Array(headerBytes.length + body.byteLength)
@@ -222,9 +225,15 @@ async function liftPanoramaToPoints(panoUrl: string, depthUrl: string): Promise<
   const W = pano.width, H = pano.height
   const positions: number[] = []
   const colors: number[] = []
+  const sizes: number[] = []
   // half-extents of the room box, with the capture point (origin) at its centre. We cap each ray at
   // this box so the room is box-shaped (flat ceiling/floor/walls) instead of a depth-blob.
   const hx = roomSize.width / 2, hy = roomSize.height / 2, hz = roomSize.depth / 2
+  // angular gap between sampled rows (radians). Two adjacent points sit ~ dist*angStep apart in the
+  // world, so a gaussian sized to that covers its patch — small near, larger far — and the wall never
+  // looks "gridded". SIZE_K sets the overlap (std as a fraction of the gap).
+  const angStep = STRIDE * (Math.PI / H)
+  const SIZE_K = 0.7
   for (let py = 0; py < H; py += STRIDE) {
     // latitude: top row (+pi/2) down to bottom row (-pi/2)
     const lat = (0.5 - py / H) * Math.PI
@@ -249,11 +258,12 @@ async function liftPanoramaToPoints(panoUrl: string, depthUrl: string): Promise<
       const dist = Math.min(depthDist, boxDist)
       positions.push(dirx * dist, diry * dist, dirz * dist)
       colors.push(pano.data[i], pano.data[i + 1], pano.data[i + 2])
+      sizes.push(dist * angStep * SIZE_K) // gaussian grows with distance to keep coverage even
     }
   }
   const count = colors.length / 3
   if (!count) throw new Error('the lift produced no 3D points (the panorama or depth map was empty)')
-  return { positions: new Float32Array(positions), colors: new Uint8Array(colors), count }
+  return { positions: new Float32Array(positions), colors: new Uint8Array(colors), sizes: new Float32Array(sizes), count }
 }
 
 // ===== parse an imported .ply into the same colored point cloud the lift produces =====
@@ -360,7 +370,18 @@ function parsePly(buffer: ArrayBuffer): SplatData {
     }
     j++
   }
-  return { positions, colors, count: out }
+  // imports have no angular sampling, so give every point one uniform size ≈ the average point
+  // spacing (cloud diagonal / cbrt(count)); fitPointsToRoom scales it with the positions.
+  let mnx = Infinity, mny = Infinity, mnz = Infinity, mxx = -Infinity, mxy = -Infinity, mxz = -Infinity
+  for (let i = 0; i < out; i++) {
+    const x = positions[i * 3], y = positions[i * 3 + 1], z = positions[i * 3 + 2]
+    if (x < mnx) mnx = x; if (x > mxx) mxx = x
+    if (y < mny) mny = y; if (y > mxy) mxy = y
+    if (z < mnz) mnz = z; if (z > mxz) mxz = z
+  }
+  const diag = Math.hypot(mxx - mnx, mxy - mny, mxz - mnz) || 1
+  const sizes = new Float32Array(out).fill((diag / Math.cbrt(out)) * 0.7)
+  return { positions, colors, sizes, count: out }
 }
 
 // draw an image url onto a canvas and read its pixels (we need the raw RGBA on the CPU). `label`
@@ -428,6 +449,8 @@ function fitPointsToRoom(
     p[i + 1] = (p[i + 1] - cy) * scale + size.height / 2 + off[1] // center the shell vertically in the room
     p[i + 2] = (p[i + 2] - cz) * scale + off[2]
   }
+  const sizes = data.sizes // gaussian sizes are in the same units as positions, so scale them too
+  for (let i = 0; i < sizes.length; i++) sizes[i] *= scale
 }
 
 // ===== bake the color + occupancy fields from the fitted points =====
@@ -508,7 +531,7 @@ export function resolveSplatCollision(
 // class, UncompressedSplatArray, is NOT a public export in 0.4.7, so we go through .ply instead.)
 // `sharedMemoryForWorkers: false` avoids needing cross-origin-isolation (COOP/COEP) headers, which
 // a plain Vercel deploy doesn't send; without it the splat sort worker can't start.
-async function renderPoints(data: SplatData, SCALE: number) {
+async function renderPoints(data: SplatData, mult: number) {
   let GS: any
   try {
     GS = await import('@mkkellogg/gaussian-splats-3d')
@@ -526,9 +549,9 @@ async function renderPoints(data: SplatData, SCALE: number) {
     if (z < mnz) mnz = z; if (z > mxz) mxz = z
   }
   const f1 = (n: number) => n.toFixed(1)
-  console.log(`[splat] ${data.count} pts · bbox x[${f1(mnx)},${f1(mxx)}] y[${f1(mny)},${f1(mxy)}] z[${f1(mnz)},${f1(mxz)}] · gaussian ${SCALE.toFixed(3)} · sample color`, data.colors.slice(0, 6))
+  console.log(`[splat] ${data.count} pts · bbox x[${f1(mnx)},${f1(mxx)}] y[${f1(mny)},${f1(mxy)}] z[${f1(mnz)},${f1(mxz)}] · size×${mult.toFixed(2)} · sample color`, data.colors.slice(0, 6))
 
-  const blobUrl = URL.createObjectURL(splatToPlyBlob(data.positions, data.colors, data.count, SCALE))
+  const blobUrl = URL.createObjectURL(splatToPlyBlob(data, mult))
   try {
     // CPU sort (default) is more compatible than gpuAcceleratedSort, which silently fails here and
     // leaves the gaussians invisible. The sort runs in a worker; with cross-origin isolation on (the
