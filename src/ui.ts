@@ -107,6 +107,7 @@ export function showConfirm(visible: boolean) {
 document.getElementById('btn-play')!.addEventListener('click', () => { if (!busy) startRound() })
 document.getElementById('btn-menu-settings')!.addEventListener('click', () => openSettings('menu'))
 document.getElementById('btn-pause-settings')!.addEventListener('click', () => openSettings('pause'))
+document.getElementById('btn-pause-menu')!.addEventListener('click', () => setState('menu'))
 document.getElementById('btn-result-menu')!.addEventListener('click', () => setState('menu'))
 document.getElementById('btn-settings-back')!.addEventListener('click', () => {
   hideAllScreens()
