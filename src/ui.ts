@@ -4,13 +4,13 @@ import { scene, canvas } from './engine'
 import { chameleon } from './chameleon'
 import { game, settings, DEFAULT_MOVE_SPEED } from './state'
 import type { GameState } from './state'
-import { loadLevel, BuiltInMaps, MAPS } from './levels'
+import { loadLevel, BuiltInMaps, MAPS, ROOM } from './levels'
 import type { LevelDefinition } from './levels'
 import { spawnSeeker, seeker, suspicionBar } from './seeker'
 import { buildSwatches } from './painting'
 import { imageToLevel } from './imageLevel'
 import { imageToSplatLevel, plyToSplatLevel } from './splatLevel'
-import { canExportSplat, exportSplatPly, canExportPano, fetchPanoBlob } from './splatRoom'
+import { canExportSplat, exportSplatPly, canExportPano, fetchPanoBlob, isSplatRoom } from './splatRoom'
 import { errText } from './errors'
 
 // ----- DOM -----
@@ -61,7 +61,9 @@ export function setState(next: GameState) {
 }
 
 function startRound() {
-  chameleon.position.set(0, 0, 0)
+  // A splat room is built around the panorama's capture point (the room centre), so spawn there to
+  // be inside it rather than on the box floor below. Box rooms spawn on the floor as before.
+  chameleon.position.set(0, isSplatRoom() ? ROOM.height / 2 : 0, 0)
   chameleon.rotation.set(0, 0, 0)
   setState('hiding')
 }

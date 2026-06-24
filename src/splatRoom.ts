@@ -211,6 +211,11 @@ function splatToPlyBlob(p: Float32Array, c: Uint8Array, count: number, scale: nu
 // layout) and its distance (the depth map). direction * distance = a 3D point; the panorama pixel
 // is its color. We stride over pixels to keep the point count sane.
 const STRIDE = 4 // sample every Nth pixel each axis (1408x704 / 4 ~= 62k points — fewer = less sort/fill lag)
+// Near the poles (straight up/down) every longitude pixel converges on the vertical axis, and the
+// depth there is the least reliable — together they make a spike/cone up the room's centre. Skip
+// rows beyond this latitude so the ceiling/floor caps (and their spikes) are dropped; the walls and
+// most of the floor/ceiling (within the limit) stay.
+const POLE_LIMIT = (72 * Math.PI) / 180
 
 async function liftPanoramaToPoints(panoUrl: string, depthUrl: string): Promise<SplatData> {
   const [pano, depth] = await Promise.all([
@@ -220,9 +225,11 @@ async function liftPanoramaToPoints(panoUrl: string, depthUrl: string): Promise<
   const W = pano.width, H = pano.height
   const positions: number[] = []
   const colors: number[] = []
+  const maxDist = roomSize.width * 0.5 // cap distance so a stray far-reading pixel can't spike out
   for (let py = 0; py < H; py += STRIDE) {
     // latitude: top row (+pi/2) down to bottom row (-pi/2)
     const lat = (0.5 - py / H) * Math.PI
+    if (Math.abs(lat) > POLE_LIMIT) continue // skip the distorted pole caps that form the centre cone
     const cosLat = Math.cos(lat), sinLat = Math.sin(lat)
     for (let px = 0; px < W; px += STRIDE) {
       const lon = (px / W) * 2 * Math.PI - Math.PI // -pi..pi around
@@ -233,7 +240,7 @@ async function liftPanoramaToPoints(panoUrl: string, depthUrl: string): Promise<
       // distance ~0, the whole textured room shrinks to a speck, and the room looks empty. If you
       // swap FAL_DEPTH_MODEL to one that outputs true depth (far = bright), drop the `1 - `.
       const v = sampleDepth(depth, px / W, py / H) / 255
-      const dist = (1 - v) * (roomSize.width * 0.6) + 0.5
+      const dist = Math.min((1 - v) * (roomSize.width * 0.6) + 0.5, maxDist)
       // equirect direction -> unit vector (y up)
       positions.push(cosLat * Math.sin(lon) * dist, sinLat * dist, cosLat * Math.cos(lon) * dist)
       colors.push(pano.data[i], pano.data[i + 1], pano.data[i + 2])
