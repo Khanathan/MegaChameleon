@@ -87,7 +87,10 @@ async function bakeAndRender(
 ) {
   fitPointsToRoom(data, size, transform) // scale+center the cloud so it fills the room box
   bakeFields(data)
-  const splatScale = (roomSize.width / grid) * 0.6 // each gaussian ~ one voxel wide (shared below)
+  // Gaussian size ≈ the spacing between lifted points. Too big (was 0.6 of a voxel ≈ 0.75u) and the
+  // isotropic blobs blur together into a shapeless cloud; this smaller size keeps the panorama's
+  // texture detail readable. Tune if it looks sparse (raise) or muddy (lower).
+  const splatScale = (roomSize.width / grid) * 0.28
   lastSplat = { positions: data.positions, colors: data.colors, count: data.count, scale: splatScale }
   await renderPoints(data, splatScale) // hand the points to the splat library (the one playtest seam)
   active = true
